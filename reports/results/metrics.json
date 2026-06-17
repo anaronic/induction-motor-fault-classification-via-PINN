@@ -1,0 +1,37 @@
+{
+  "model_path": "models\\paderborn_subset_pinn.npz",
+  "data_dir": "data\\paderborn\\extracted",
+  "sample_count": 2560,
+  "window_size": 4096,
+  "stride": 2048,
+  "signal": "current",
+  "accuracy": 0.5484375,
+  "class_metrics": {
+    "healthy": {
+      "precision": 0.5707070707070697,
+      "recall": 0.5296874999999992,
+      "f1": 0.5494327390594674
+    },
+    "inner_race": {
+      "precision": 0.4624017957351285,
+      "recall": 0.6437499999999989,
+      "f1": 0.5382103200517662
+    },
+    "outer_race": {
+      "precision": 0.6545961002785506,
+      "recall": 0.7343749999999988,
+      "f1": 0.6921944035341103
+    },
+    "rolling_element": {
+      "precision": 0.5126050420168052,
+      "recall": 0.28593749999999957,
+      "f1": 0.3671013039112747
+    }
+  },
+  "class_names": [
+    "healthy",
+    "inner_race",
+    "outer_race",
+    "rolling_element"
+  ]
+}

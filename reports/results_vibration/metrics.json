@@ -1,0 +1,37 @@
+{
+  "model_path": "models\\paderborn_vibration_pinn.npz",
+  "data_dir": "data\\paderborn\\extracted",
+  "sample_count": 5120,
+  "window_size": 4096,
+  "stride": 2048,
+  "signal": "vibration",
+  "accuracy": 0.994921875,
+  "class_metrics": {
+    "healthy": {
+      "precision": 0.9868421052631572,
+      "recall": 0.9960937499999993,
+      "f1": 0.9914463452561089
+    },
+    "inner_race": {
+      "precision": 0.9937007874015741,
+      "recall": 0.9859374999999992,
+      "f1": 0.9898039215681268
+    },
+    "outer_race": {
+      "precision": 0.9999999999999993,
+      "recall": 0.9999999999999993,
+      "f1": 0.9999999999994993
+    },
+    "rolling_element": {
+      "precision": 0.9992175273865408,
+      "recall": 0.9976562499999992,
+      "f1": 0.9984362783419544
+    }
+  },
+  "class_names": [
+    "healthy",
+    "inner_race",
+    "outer_race",
+    "rolling_element"
+  ]
+}

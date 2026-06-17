@@ -1,0 +1,5 @@
+class,precision,recall,f1
+healthy,0.8799,0.8013,0.8388
+inner_race,0.8323,0.8081,0.8200
+outer_race,0.8699,0.9332,0.9004
+rolling_element,0.9204,0.9151,0.9177

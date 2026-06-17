@@ -1,0 +1,5 @@
+actual\predicted,healthy,inner_race,outer_race,rolling_element
+healthy,1275,5,0,0
+inner_race,17,1262,0,1
+outer_race,0,0,1280,0
+rolling_element,0,3,0,1277
