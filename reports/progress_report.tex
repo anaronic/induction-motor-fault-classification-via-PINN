@@ -342,6 +342,50 @@ pdflatex --shell-escape progress_report.tex
 
 On Overleaf, upload this \texttt{progress\_report.tex} file together with the complete \texttt{results\_final} folder. If SVG compilation is unavailable, convert the SVG figures to PDF or PNG and replace \texttt{\textbackslash includesvg} with \texttt{\textbackslash includegraphics}.
 
+\section{Data Leakage Cross-Check}
+A natural concern with windowed signals is that overlapping rolling windows from the same
+recording could appear in both training and test sets, inflating accuracy. To check this
+directly, the same model and the same features were trained under three increasingly strict
+split strategies, changing only what is allowed to be shared between train and test. The
+experiment is reproducible via \texttt{scripts\textbackslash leakage\_check.py}.
+
+\begin{table}[H]
+\centering
+\caption{Leakage cross-check on all 32 archives. Only the split strategy changes.}
+\label{tab:leakage}
+\begin{tabular}{lll}
+\toprule
+\textbf{Split strategy} & \textbf{Shared train/test} & \textbf{Test accuracy} \\
+\midrule
+Random window split & windows of same file & 0.799 \\
+Grouped by \texttt{.mat} file (this report) & same code, different file & 0.783 \\
+Held-out whole bearing code & nothing & 0.433 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two conclusions follow. First, the random-window and grouped-by-file splits differ by only
+about 1.6 percentage points, so \textbf{rolling-window leakage is not the source of the reported
+accuracy}; if it were, the grouped split would have dropped sharply. Second, the genuine
+generalization gap appears only when \emph{entire bearing codes} are held out, where accuracy
+falls to about 0.43. This identifies bearing-instance generalization, rather than window
+overlap, as the real limitation.
+
+The same cross-check applied to the earlier four-archive subset (K001, KA01, KI01, KB23)
+reproduces approximately 0.99 accuracy under \emph{both} the random and the leak-free grouped
+splits. This confirms that the earlier high accuracy was not caused by window leakage but by the
+triviality of a one-bearing-per-class problem: with a single physical bearing per class there is
+almost no intra-class variability, and unseen-bearing generalization cannot even be measured.
+Expanding to all 32 archives introduces realistic intra-class variability and brings accuracy to
+the believable 86.38\% reported above.
+
+\section{Data Scaling}
+Scaling is applied in two independent stages, and test-set statistics are never used during
+fitting. First, each window is z-normalized using only its own mean and standard deviation
+before feature extraction. Second, a per-feature standardizer is fit on the training features
+only and the same training-derived mean and scale are applied to the test features at inference.
+Consequently there is no scaling-related leakage between training and test data.
+
 \section{Limitations}
 \begin{itemize}[leftmargin=2em]
     \item The final evaluation is grouped by MATLAB file, but an even stricter future evaluation should hold out complete operating conditions or complete bearing IDs.
