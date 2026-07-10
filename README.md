@@ -9,6 +9,52 @@ The implementation follows the project abstract and attached references by combi
 - bearing characteristic-frequency priors for inner-race, outer-race, and rolling-element defects,
 - a trainable neural classifier regularized to stay consistent with physics-derived diagnostic scores.
 
+## Resume on a new machine
+
+The dataset (`data/`) and trained models (`models/`) are **not** committed (see `.gitignore`),
+so a fresh clone contains only code, reports, and result artifacts. To rebuild the full working
+environment from scratch:
+
+```powershell
+# 1. Clone and enter the repo
+git clone https://github.com/anaronic/induction-motor-fault-classification-via-PINN.git
+cd induction-motor-fault-classification-via-PINN
+
+# 2. Create a virtual environment (Python 3.10+; developed on 3.14)
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 3. Install the package with MATLAB (.mat) support
+python -m pip install -e .[paderborn]
+
+# 4. (Optional) install dev tooling and run the smoke test to confirm the install
+python -m pip install -e .[dev]
+pinn-motor-fault smoke --epochs 10
+python -m pytest -q
+```
+
+Then re-download and re-process the dataset (next section), and re-train.
+
+## Re-process the Paderborn dataset
+
+If you need to rebuild `data/paderborn/extracted` from scratch on a new machine, run the two
+steps below. Extraction needs a RAR-capable tool (`tar`, `7z`, `7za`, `unrar`, or `rar`) on
+`PATH`. The full 32-archive dataset is several GB.
+
+```powershell
+# Download + extract all 32 official bearing-state archives in one command
+pinn-motor-fault download `
+  --codes K001 K002 K003 K004 K005 K006 KA01 KA03 KA04 KA05 KA06 KA07 KA08 KA09 KA15 KA16 KA22 KA30 KB23 KB24 KB27 KI01 KI03 KI04 KI05 KI07 KI08 KI14 KI16 KI17 KI18 KI21 `
+  --extract --raw-dir data\paderborn\raw --extract-dir data\paderborn\extracted
+```
+
+The archives come from the Paderborn KAt BearingDataCenter
+(`https://groups.uni-paderborn.de/kat/BearingDataCenter/`). After extraction you should have 32
+bearing-code folders under `data\paderborn\extracted`, each containing `.mat` measurement files.
+Labels are inferred automatically from the bearing code (`K00*`=healthy, `KI*`=inner race,
+`KA*`=outer race, `KB*`=rolling element). Once the data is in place, reproduce the headline result
+with the `experiment` command in the [Train](#train) section below.
+
 ## Install
 
 ```powershell
