@@ -10,10 +10,12 @@ import numpy as np
 from .features import CLASS_NAMES, Standardizer
 
 
-@dataclass
+@dataclass 
 class TrainingHistory:
     loss: list[float]
     accuracy: list[float]
+    learning_rates: list[float]  # Track effective learning rates
+    grad_norms: list[float]     # Track gradient norms
 
 
 class PhysicsInformedNN:
@@ -26,6 +28,19 @@ class PhysicsInformedNN:
         learning_rate: float = 0.01,
         seed: int = 7,
     ) -> None:
+        """Physics-Informed Neural Network for motor fault detection.
+        
+        Architecture:
+        - Input layer: input_dim features
+        - Hidden layer: hidden_dim units with tanh activation
+        - Output layer: len(class_names) units with softmax activation
+        
+        Loss Function:
+        L = CrossEntropyLoss + λ * PhysicsLoss
+        where λ = physics_weight
+        
+        PhysicsLoss = MSE between predicted probabilities and physics targets
+        """
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.class_names = tuple(class_names)

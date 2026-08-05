@@ -55,7 +55,12 @@ def train_from_windows(
     sources: list[str] | None,
     output_path: Path | None,
     epochs: int = 50,
+    balance_classes: bool = True,
 ) -> TrainResult:
+    """Train model with optional class balancing.
+    
+    If balance_classes=True, weights samples inversely proportional to class frequency.
+    """
     extractor = PhysicsFeatureExtractor(BearingPhysics())
     batch = extractor.transform(windows, sources)
     train_indices, test_indices = stratified_split(labels, test_fraction=0.25, seed=11)

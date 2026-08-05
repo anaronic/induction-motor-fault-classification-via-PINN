@@ -81,6 +81,12 @@ class PhysicsFeatureExtractor:
 
 
 def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
+    """Extract time-domain features with enhanced preprocessing:
+    - Normalization (zero mean, unit variance)
+    - Skewness and kurtosis
+    - Peak/RMS ratios
+    - Statistical moments
+    """
     abs_x = np.abs(x)
     rms = math.sqrt(float(np.mean(x * x)) + 1e-12)
     peak = float(np.max(abs_x))
