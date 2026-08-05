@@ -1,8 +1,42 @@
+# Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+*.so
+.Python
 *.egg-info/
+*.egg
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+pip-selfcheck.json
+
+# Data
 data/
 models/
+
+# Documentation
 docs/*.pdf
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Other
 .aider*
+.DS_Store
+Thumbs.db
