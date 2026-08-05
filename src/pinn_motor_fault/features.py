@@ -87,6 +87,8 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
     - Peak/RMS ratios
     - Statistical moments
     - Correlation analysis
+    - Zero-crossing rate
+    - Entropy measures
     """
     # Calculate autocorrelation
     autocorr = np.correlate(x, x, mode='full')[len(x)-1:]
@@ -109,6 +111,10 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
     skew = float(np.mean((centered / std) ** 3))
     kurtosis = float(np.mean((centered / std) ** 4))
     mean_abs = float(np.mean(abs_x) + 1e-12)
+    # Additional features
+    zero_crossings = float(np.sum(np.diff(np.sign(x)) != 0))
+    entropy = -np.sum(x * np.log(x + 1e-12))
+    
     values = np.asarray(
         [
             float(np.mean(x)),
@@ -121,10 +127,14 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
             peak / rms,
             rms / mean_abs,
             peak / mean_abs,
+            zero_crossings,
+            entropy,
         ],
         dtype=np.float64,
     )
-    names = ["mean", "std", "rms", "peak", "ptp", "skew", "kurtosis", "crest_factor", "shape_factor", "impulse_factor"]
+    names = ["mean", "std", "rms", "peak", "ptp", "skew", "kurtosis", 
+             "crest_factor", "shape_factor", "impulse_factor",
+             "zero_crossings", "entropy"]
     return values, names
 
 

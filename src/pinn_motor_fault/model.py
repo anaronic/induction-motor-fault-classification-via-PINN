@@ -30,6 +30,34 @@ class PhysicsInformedNN:
     ) -> None:
         """Physics-Informed Neural Network for motor fault detection.
         
+        Architecture Details:
+        - Input Layer: input_dim features
+        - Hidden Layer: hidden_dim units with tanh activation
+          - Weight initialization: He initialization
+          - Bias initialization: Zero initialization
+        - Output Layer: len(class_names) units with softmax activation
+          - Weight initialization: He initialization
+          - Bias initialization: Zero initialization
+        
+        Training Process:
+        - Batch size: 64 (default)
+        - Learning rate: 0.01 (default)
+        - Physics weight (λ): 0.25 (default)
+        - Loss Function: CrossEntropyLoss + λ * PhysicsLoss
+        - Optimizer: Gradient Descent with momentum
+        
+        Physics Constraints:
+        - Enforces bearing fault frequency characteristics
+        - Uses envelope spectrum analysis
+        - Harmonic energy constraints
+        
+        Convergence Criteria:
+        - Early stopping based on loss improvement
+        - Patience: 5 epochs (default)
+        - Convergence threshold: 1e-5 (default)
+        """
+        """Physics-Informed Neural Network for motor fault detection.
+        
         Architecture:
         - Input layer: input_dim features
         - Hidden layer: hidden_dim units with tanh activation
@@ -64,6 +92,8 @@ class PhysicsInformedNN:
         verbose: bool = True,
         lambda_range: tuple[float, float] = (0.1, 0.5),
         lr_range: tuple[float, float] = (0.01, 0.1),
+        convergence_threshold: float = 1e-5,
+        patience: int = 5,
     ) -> TrainingHistory:
         """Fit model with hyperparameter tuning.
         
@@ -92,7 +122,35 @@ class PhysicsInformedNN:
         
         # Set best parameters
         self.learning_rate, self.physics_weight = best_params
-        return self._fit_epochs(x, y, physics_targets, epochs, batch_size, validation, verbose)
+        
+        # Add convergence checking
+        best_loss = float('inf')
+        no_improvement_count = 0
+        history = TrainingHistory(loss=[], accuracy=[], learning_rates=[], grad_norms=[])
+        
+        for epoch in range(1, epochs + 1):
+            # Train one epoch
+            epoch_loss, epoch_acc = self._train_epoch(x, y, physics_targets, batch_size)
+            
+            # Check convergence
+            if epoch_loss < best_loss - convergence_threshold:
+                best_loss = epoch_loss
+                no_improvement_count = 0
+            else:
+                no_improvement_count += 1
+                if no_improvement_count >= patience:
+                    if verbose:
+                        print(f"Early stopping at epoch {epoch} - loss converged")
+                    break
+            
+            # Track history
+            history.loss.append(epoch_loss)
+            history.accuracy.append(epoch_acc)
+            
+            if verbose and (epoch == 1 or epoch == epochs or epoch % max(1, epochs // 5) == 0):
+                print(f"epoch={epoch:03d} loss={epoch_loss:.4f} accuracy={epoch_acc:.3f}")
+        
+        return history
         x_train = self.standardizer.fit_transform(x)
         y_indices = labels_to_indices(y, self.class_names)
         history = TrainingHistory(loss=[], accuracy=[])
