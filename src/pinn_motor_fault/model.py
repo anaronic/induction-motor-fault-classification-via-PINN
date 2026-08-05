@@ -161,7 +161,12 @@ class PhysicsInformedNN:
             order = rng.permutation(x_train.shape[0])
             for start in range(0, x_train.shape[0], batch_size):
                 batch_indices = order[start : start + batch_size]
-                self._train_batch(x_train[batch_indices], y_indices[batch_indices], physics_targets[batch_indices])
+                self._train_batch(
+                    x_train[batch_indices], 
+                    y_indices[batch_indices], 
+                    physics_targets[batch_indices],
+                    class_weights=class_weights
+                )
 
             loss, acc = self.loss_and_accuracy(x, y, physics_targets)
             history.loss.append(loss)
@@ -174,16 +179,22 @@ class PhysicsInformedNN:
                 print(message)
         return history
 
-    def _train_batch(self, x: np.ndarray, y_indices: np.ndarray, physics_targets: np.ndarray) -> None:
+    def _train_batch(
+        self, 
+        x: np.ndarray, 
+        y_indices: np.ndarray, 
+        physics_targets: np.ndarray,
+        class_weights: dict[str, float] | None = None
+    ) -> None:
         hidden, probabilities = self._forward_standardized(x)
         n = x.shape[0]
         one_hot = np.zeros_like(probabilities)
         one_hot[np.arange(n), y_indices] = 1.0
 
         # Apply class weights if provided
-        weights = np.ones(n)
+        weights = np.ones(x.shape[0])
         if class_weights is not None:
-            weights = np.array([class_weights[label] for label in y])
+            weights = np.array([class_weights[self.class_names[index]] for index in y_indices])
             
         dlogits = (probabilities - one_hot) * weights.reshape(-1, 1) / n
         if self.physics_weight > 0:
