@@ -86,7 +86,21 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
     - Skewness and kurtosis
     - Peak/RMS ratios
     - Statistical moments
+    - Correlation analysis
     """
+    # Calculate autocorrelation
+    autocorr = np.correlate(x, x, mode='full')[len(x)-1:]
+    autocorr /= autocorr[0]
+    
+    # Calculate statistical features
+    abs_x = np.abs(x)
+    rms = math.sqrt(float(np.mean(x * x)) + 1e-12)
+    peak = float(np.max(abs_x))
+    centered = x - np.mean(x)
+    std = float(np.std(centered) + 1e-12)
+    skew = float(np.mean((centered / std) ** 3))
+    kurtosis = float(np.mean((centered / std) ** 4))
+    mean_abs = float(np.mean(abs_x) + 1e-12)
     abs_x = np.abs(x)
     rms = math.sqrt(float(np.mean(x * x)) + 1e-12)
     peak = float(np.max(abs_x))

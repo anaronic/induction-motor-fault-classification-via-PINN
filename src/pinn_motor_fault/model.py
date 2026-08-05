@@ -62,7 +62,37 @@ class PhysicsInformedNN:
         batch_size: int = 64,
         validation: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
         verbose: bool = True,
+        lambda_range: tuple[float, float] = (0.1, 0.5),
+        lr_range: tuple[float, float] = (0.01, 0.1),
     ) -> TrainingHistory:
+        """Fit model with hyperparameter tuning.
+        
+        Args:
+            lambda_range: Range of physics weight values to try
+            lr_range: Range of learning rates to try
+        """
+        # Initialize best parameters
+        best_loss = float('inf')
+        best_params = None
+        
+        # Grid search over hyperparameters
+        for lr in np.linspace(lr_range[0], lr_range[1], 5):
+            for physics_weight in np.linspace(lambda_range[0], lambda_range[1], 5):
+                self.learning_rate = lr
+                self.physics_weight = physics_weight
+                
+                # Train with current parameters
+                history = self._fit_epochs(x, y, physics_targets, epochs, batch_size, validation, verbose)
+                
+                # Track best configuration
+                current_loss = history.loss[-1]
+                if current_loss < best_loss:
+                    best_loss = current_loss
+                    best_params = (lr, physics_weight)
+        
+        # Set best parameters
+        self.learning_rate, self.physics_weight = best_params
+        return self._fit_epochs(x, y, physics_targets, epochs, batch_size, validation, verbose)
         x_train = self.standardizer.fit_transform(x)
         y_indices = labels_to_indices(y, self.class_names)
         history = TrainingHistory(loss=[], accuracy=[])
