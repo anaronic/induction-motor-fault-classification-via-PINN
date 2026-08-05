@@ -61,12 +61,17 @@ def train_from_windows(
     
     If balance_classes=True, weights samples inversely proportional to class frequency.
     """
-    # Calculate class weights if balancing is enabled
+    # Enhanced class balancing with focal loss weighting
     class_weights = None
     if balance_classes:
         class_counts = {label: np.sum(labels == label) for label in CLASS_NAMES}
         total_samples = len(labels)
-        class_weights = {label: total_samples/(len(class_counts)*count) for label, count in class_counts.items()}
+        # Inverse frequency weighting with focal loss adjustment (gamma=2)
+        class_weights = {
+            label: (total_samples/(len(class_counts)*count)) * (1 - (count/total_samples))**2 
+            for label, count in class_counts.items()
+        }
+        print(f"Using class weights: {class_weights}")
     extractor = PhysicsFeatureExtractor(BearingPhysics())
     batch = extractor.transform(windows, sources)
     train_indices, test_indices = stratified_split(labels, test_fraction=0.25, seed=11)

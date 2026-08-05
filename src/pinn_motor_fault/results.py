@@ -71,6 +71,7 @@ def write_evaluation_artifacts(
     windows: np.ndarray,
     signal_name: str,
     settings: dict[str, object],
+    include_hyperparams: bool = True,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     figure_dir = output_dir / "figures"
@@ -83,7 +84,20 @@ def write_evaluation_artifacts(
         "accuracy": accuracy,
         "class_metrics": class_metrics,
         "class_names": list(model.class_names),
+        "class_distribution": {
+            name: int(np.sum(labels == name)) 
+            for name in model.class_names
+        },
     }
+    if include_hyperparams:
+        metrics.update({
+            "hyperparameters": {
+                "learning_rate": float(model.learning_rate),
+                "physics_weight": float(model.physics_weight),
+                "hidden_dim": int(model.hidden_dim),
+                "batch_size": settings.get("batch_size", 64),
+            }
+        })
     metrics.update(settings)
 
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")

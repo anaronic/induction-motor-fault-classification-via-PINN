@@ -94,6 +94,7 @@ class PhysicsInformedNN:
         lr_range: tuple[float, float] = (0.01, 0.1),
         convergence_threshold: float = 1e-5,
         patience: int = 5,
+        class_weights: dict[str, float] | None = None,
     ) -> TrainingHistory:
         """Fit model with hyperparameter tuning.
         
@@ -179,9 +180,14 @@ class PhysicsInformedNN:
         one_hot = np.zeros_like(probabilities)
         one_hot[np.arange(n), y_indices] = 1.0
 
-        dlogits = (probabilities - one_hot) / n
+        # Apply class weights if provided
+        weights = np.ones(n)
+        if class_weights is not None:
+            weights = np.array([class_weights[label] for label in y])
+            
+        dlogits = (probabilities - one_hot) * weights.reshape(-1, 1) / n
         if self.physics_weight > 0:
-            dprob = (2.0 * self.physics_weight / n) * (probabilities - physics_targets)
+            dprob = (2.0 * self.physics_weight / n) * (probabilities - physics_targets) * weights.reshape(-1, 1)
             correction = np.sum(dprob * probabilities, axis=1, keepdims=True)
             dlogits += probabilities * (dprob - correction)
 
