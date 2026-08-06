@@ -1,0 +1,49 @@
+{
+  "accuracy": 0.25,
+  "class_metrics": {
+    "healthy": {
+      "precision": 0.2499999999999844,
+      "recall": 0.99999999999975,
+      "f1": 0.39999999999964
+    },
+    "inner_race": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "outer_race": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "rolling_element": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    }
+  },
+  "class_names": [
+    "healthy",
+    "inner_race",
+    "outer_race",
+    "rolling_element"
+  ],
+  "class_distribution": {
+    "healthy": 4,
+    "inner_race": 4,
+    "outer_race": 4,
+    "rolling_element": 4
+  },
+  "hyperparameters": {
+    "learning_rate": 0.02,
+    "physics_weight": 0.2,
+    "hidden_dim": 32,
+    "batch_size": 64
+  },
+  "model_path": "temp_model.npz",
+  "sample_count": 16,
+  "window_size": 512,
+  "stride": 512,
+  "signal": "synthetic",
+  "split_strategy": "all_synthetic"
+}

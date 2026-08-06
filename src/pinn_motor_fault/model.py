@@ -10,14 +10,13 @@ import numpy as np
 from .features import CLASS_NAMES, Standardizer
 
 
-@dataclass 
+@dataclass
 class TrainingHistory:
     loss: list[float]
     accuracy: list[float]
-    learning_rates: list[float]  # Track effective learning rates
-    grad_norms: list[float]     # Track gradient norms
 
 
+# Small NumPy-based neural model that combines classification loss with a physics-informed target loss.
 class PhysicsInformedNN:
     def __init__(
         self,
@@ -56,19 +55,6 @@ class PhysicsInformedNN:
         - Patience: 5 epochs (default)
         - Convergence threshold: 1e-5 (default)
         """
-        """Physics-Informed Neural Network for motor fault detection.
-        
-        Architecture:
-        - Input layer: input_dim features
-        - Hidden layer: hidden_dim units with tanh activation
-        - Output layer: len(class_names) units with softmax activation
-        
-        Loss Function:
-        L = CrossEntropyLoss + λ * PhysicsLoss
-        where λ = physics_weight
-        
-        PhysicsLoss = MSE between predicted probabilities and physics targets
-        """
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.class_names = tuple(class_names)
@@ -80,6 +66,7 @@ class PhysicsInformedNN:
         self.w2 = rng.normal(0.0, np.sqrt(2.0 / hidden_dim), size=(hidden_dim, len(class_names)))
         self.b2 = np.zeros(len(class_names))
         self.standardizer = Standardizer()
+        self.training_history: TrainingHistory | None = None
 
     def fit(
         self,
@@ -96,44 +83,68 @@ class PhysicsInformedNN:
         patience: int = 5,
         class_weights: dict[str, float] | None = None,
     ) -> TrainingHistory:
-        """Fit model with hyperparameter tuning.
-        
-        Args:
-            lambda_range: Range of physics weight values to try
-            lr_range: Range of learning rates to try
-        """
-        # Initialize best parameters
-        best_loss = float('inf')
-        best_params = None
-        
-        # Grid search over hyperparameters
+        """Fit the model to training data with optional hyperparameter search."""
+        # Standardize input features before training.
+        x_train = self.standardizer.fit_transform(x)
+        y_indices = labels_to_indices(y, self.class_names)
+
+        validation_data = None
+        if validation is not None:
+            x_val, y_val, physics_val = validation
+            validation_data = (
+                self.standardizer.transform(x_val),
+                labels_to_indices(y_val, self.class_names),
+                physics_val,
+            )
+
+        best_loss = float("inf")
+        best_params = (self.learning_rate, self.physics_weight)
+
         for lr in np.linspace(lr_range[0], lr_range[1], 5):
             for physics_weight in np.linspace(lambda_range[0], lambda_range[1], 5):
-                self.learning_rate = lr
-                self.physics_weight = physics_weight
-                
-                # Train with current parameters
-                history = self._fit_epochs(x, y, physics_targets, epochs, batch_size, validation, verbose)
-                
-                # Track best configuration
-                current_loss = history.loss[-1]
-                if current_loss < best_loss:
-                    best_loss = current_loss
+                trial = PhysicsInformedNN(
+                    input_dim=self.input_dim,
+                    hidden_dim=self.hidden_dim,
+                    class_names=self.class_names,
+                    physics_weight=physics_weight,
+                    learning_rate=lr,
+                    seed=0,
+                )
+                trial.standardizer.mean_ = self.standardizer.mean_
+                trial.standardizer.scale_ = self.standardizer.scale_
+                trial.w1 = self.w1.copy()
+                trial.b1 = self.b1.copy()
+                trial.w2 = self.w2.copy()
+                trial.b2 = self.b2.copy()
+                trial_history = trial._fit_epochs(
+                    x_train,
+                    y_indices,
+                    physics_targets,
+                    epochs,
+                    batch_size,
+                    validation_data,
+                    verbose=False,
+                    class_weights=class_weights,
+                )
+                if trial_history.loss and trial_history.loss[-1] < best_loss:
+                    best_loss = trial_history.loss[-1]
                     best_params = (lr, physics_weight)
-        
-        # Set best parameters
+
         self.learning_rate, self.physics_weight = best_params
-        
-        # Add convergence checking
-        best_loss = float('inf')
+
+        best_loss = float("inf")
         no_improvement_count = 0
-        history = TrainingHistory(loss=[], accuracy=[], learning_rates=[], grad_norms=[])
-        
+        history = TrainingHistory(loss=[], accuracy=[])
+
         for epoch in range(1, epochs + 1):
-            # Train one epoch
-            epoch_loss, epoch_acc = self._train_epoch(x, y, physics_targets, batch_size)
-            
-            # Check convergence
+            epoch_loss, epoch_acc = self._train_epoch(
+                x_train,
+                y_indices,
+                physics_targets,
+                batch_size,
+                class_weights=class_weights,
+            )
+
             if epoch_loss < best_loss - convergence_threshold:
                 best_loss = epoch_loss
                 no_improvement_count = 0
@@ -143,41 +154,84 @@ class PhysicsInformedNN:
                     if verbose:
                         print(f"Early stopping at epoch {epoch} - loss converged")
                     break
-            
-            # Track history
+
             history.loss.append(epoch_loss)
             history.accuracy.append(epoch_acc)
-            
+
             if verbose and (epoch == 1 or epoch == epochs or epoch % max(1, epochs // 5) == 0):
-                print(f"epoch={epoch:03d} loss={epoch_loss:.4f} accuracy={epoch_acc:.3f}")
-        
+                message = f"epoch={epoch:03d} loss={epoch_loss:.4f} accuracy={epoch_acc:.3f}"
+                if validation_data is not None:
+                    val_loss, val_acc = self._evaluate_indices(*validation_data)
+                    message += f" val_loss={val_loss:.4f} val_accuracy={val_acc:.3f}"
+                print(message)
+
+        self.training_history = history
         return history
-        x_train = self.standardizer.fit_transform(x)
-        y_indices = labels_to_indices(y, self.class_names)
+
+    def _fit_epochs(
+        self,
+        x: np.ndarray,
+        y_indices: np.ndarray,
+        physics_targets: np.ndarray,
+        epochs: int,
+        batch_size: int,
+        validation: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+        verbose: bool = False,
+        class_weights: dict[str, float] | None = None,
+    ) -> TrainingHistory:
+        # Run training for a fixed number of epochs and collect history.
         history = TrainingHistory(loss=[], accuracy=[])
-        rng = np.random.default_rng(42)
-
         for epoch in range(1, epochs + 1):
-            order = rng.permutation(x_train.shape[0])
-            for start in range(0, x_train.shape[0], batch_size):
-                batch_indices = order[start : start + batch_size]
-                self._train_batch(
-                    x_train[batch_indices], 
-                    y_indices[batch_indices], 
-                    physics_targets[batch_indices],
-                    class_weights=class_weights
-                )
-
-            loss, acc = self.loss_and_accuracy(x, y, physics_targets)
-            history.loss.append(loss)
-            history.accuracy.append(acc)
+            epoch_loss, epoch_acc = self._train_epoch(
+                x,
+                y_indices,
+                physics_targets,
+                batch_size,
+                class_weights=class_weights,
+            )
+            history.loss.append(epoch_loss)
+            history.accuracy.append(epoch_acc)
             if verbose and (epoch == 1 or epoch == epochs or epoch % max(1, epochs // 5) == 0):
-                message = f"epoch={epoch:03d} loss={loss:.4f} accuracy={acc:.3f}"
+                message = f"epoch={epoch:03d} loss={epoch_loss:.4f} accuracy={epoch_acc:.3f}"
                 if validation is not None:
-                    val_loss, val_acc = self.loss_and_accuracy(*validation)
+                    val_loss, val_acc = self._evaluate_indices(*validation)
                     message += f" val_loss={val_loss:.4f} val_accuracy={val_acc:.3f}"
                 print(message)
         return history
+
+    def _train_epoch(
+        self,
+        x: np.ndarray,
+        y_indices: np.ndarray,
+        physics_targets: np.ndarray,
+        batch_size: int,
+        class_weights: dict[str, float] | None = None,
+    ) -> tuple[float, float]:
+        # Shuffle training samples and apply batch updates over one epoch.
+        rng = np.random.default_rng()
+        order = rng.permutation(x.shape[0])
+        for start in range(0, x.shape[0], batch_size):
+            batch_indices = order[start : start + batch_size]
+            self._train_batch(
+                x[batch_indices],
+                y_indices[batch_indices],
+                physics_targets[batch_indices],
+                class_weights=class_weights,
+            )
+        return self._evaluate_indices(x, y_indices, physics_targets)
+
+    def _evaluate_indices(
+        self,
+        x: np.ndarray,
+        y_indices: np.ndarray,
+        physics_targets: np.ndarray,
+    ) -> tuple[float, float]:
+        # Compute cross-entropy plus physics-informed target loss, and accuracy.
+        _, probabilities = self._forward_standardized(x)
+        ce = -np.mean(np.log(probabilities[np.arange(y_indices.size), y_indices] + 1e-12))
+        physics_loss = float(np.mean((probabilities - physics_targets) ** 2))
+        accuracy = float(np.mean(np.argmax(probabilities, axis=1) == y_indices))
+        return float(ce + self.physics_weight * physics_loss), accuracy
 
     def _train_batch(
         self, 
@@ -186,6 +240,7 @@ class PhysicsInformedNN:
         physics_targets: np.ndarray,
         class_weights: dict[str, float] | None = None
     ) -> None:
+        # Forward pass, gradient calculation, and parameter update for one batch.
         hidden, probabilities = self._forward_standardized(x)
         n = x.shape[0]
         one_hot = np.zeros_like(probabilities)
@@ -215,15 +270,18 @@ class PhysicsInformedNN:
         self.b2 -= self.learning_rate * db2
 
     def predict_proba(self, x: np.ndarray) -> np.ndarray:
+        # Return class probability estimates for input examples.
         standardized = self.standardizer.transform(x)
         _, probabilities = self._forward_standardized(standardized)
         return probabilities
 
     def predict(self, x: np.ndarray) -> np.ndarray:
+        # Predict class labels from highest softmax probability.
         indices = np.argmax(self.predict_proba(x), axis=1)
         return np.asarray([self.class_names[index] for index in indices])
 
     def loss_and_accuracy(self, x: np.ndarray, y: np.ndarray, physics_targets: np.ndarray) -> tuple[float, float]:
+        # Compute overall loss and prediction accuracy on data.
         probabilities = self.predict_proba(x)
         y_indices = labels_to_indices(y, self.class_names)
         ce = -np.mean(np.log(probabilities[np.arange(y_indices.size), y_indices] + 1e-12))
@@ -233,24 +291,29 @@ class PhysicsInformedNN:
         return float(ce + self.physics_weight * physics_loss), accuracy
 
     def save(self, path: Path) -> None:
+        # Persist trained weights, standardizer parameters, and hyperparameters.
         path.parent.mkdir(parents=True, exist_ok=True)
         if self.standardizer.mean_ is None or self.standardizer.scale_ is None:
             raise RuntimeError("Cannot save an unfitted model.")
-        np.savez(
-            path,
-            w1=self.w1,
-            b1=self.b1,
-            w2=self.w2,
-            b2=self.b2,
-            mean=self.standardizer.mean_,
-            scale=self.standardizer.scale_,
-            class_names=np.asarray(self.class_names),
-            physics_weight=np.asarray([self.physics_weight]),
-            learning_rate=np.asarray([self.learning_rate]),
-        )
+        savez_kwargs = {
+            "w1": self.w1,
+            "b1": self.b1,
+            "w2": self.w2,
+            "b2": self.b2,
+            "mean": self.standardizer.mean_,
+            "scale": self.standardizer.scale_,
+            "class_names": np.asarray(self.class_names),
+            "physics_weight": np.asarray([self.physics_weight]),
+            "learning_rate": np.asarray([self.learning_rate]),
+        }
+        if self.training_history is not None:
+            savez_kwargs["history_loss"] = np.asarray(self.training_history.loss, dtype=np.float64)
+            savez_kwargs["history_accuracy"] = np.asarray(self.training_history.accuracy, dtype=np.float64)
+        np.savez(path, **savez_kwargs)
 
     @classmethod
     def load(cls, path: Path) -> "PhysicsInformedNN":
+        # Load model state and standardization parameters from disk.
         data = np.load(path, allow_pickle=False)
         model = cls(
             input_dim=int(data["w1"].shape[0]),
@@ -265,6 +328,11 @@ class PhysicsInformedNN:
         model.b2 = data["b2"]
         model.standardizer.mean_ = data["mean"]
         model.standardizer.scale_ = data["scale"]
+        if "history_loss" in data and "history_accuracy" in data:
+            model.training_history = TrainingHistory(
+                loss=list(data["history_loss"].astype(float)),
+                accuracy=list(data["history_accuracy"].astype(float)),
+            )
         return model
 
     def _forward_standardized(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -275,6 +343,7 @@ class PhysicsInformedNN:
 
 
 def labels_to_indices(labels: np.ndarray, class_names: tuple[str, ...] = CLASS_NAMES) -> np.ndarray:
+    # Map string labels to integer indices for classification training.
     mapping = {label: index for index, label in enumerate(class_names)}
     try:
         return np.asarray([mapping[str(label)] for label in labels], dtype=np.int64)
@@ -286,4 +355,3 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
     shifted = logits - np.max(logits, axis=1, keepdims=True)
     exp = np.exp(shifted)
     return exp / np.sum(exp, axis=1, keepdims=True)
-

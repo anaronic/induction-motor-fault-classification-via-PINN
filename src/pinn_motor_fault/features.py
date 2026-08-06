@@ -38,9 +38,11 @@ class FeatureBatch:
 
 class PhysicsFeatureExtractor:
     def __init__(self, physics: BearingPhysics | None = None) -> None:
+        # Use bearing physics constants to derive diagnostic targets from signal metadata.
         self.physics = physics or BearingPhysics()
 
     def transform(self, windows: np.ndarray, sources: list[str] | None = None) -> FeatureBatch:
+        # Convert raw windows into feature vectors, physics targets, and feature names.
         feature_rows: list[np.ndarray] = []
         physics_rows: list[np.ndarray] = []
         names: list[str] | None = None
@@ -58,6 +60,7 @@ class PhysicsFeatureExtractor:
         )
 
     def _one_window(self, window: np.ndarray, shaft_hz: float) -> tuple[np.ndarray, list[str], np.ndarray]:
+        # Extract time-domain, spectral, and envelope-based diagnostic features for a single window.
         x = np.asarray(window, dtype=np.float64).reshape(-1)
         x = x - np.mean(x)
         std = np.std(x) + 1e-12
@@ -81,28 +84,8 @@ class PhysicsFeatureExtractor:
 
 
 def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
-    """Extract time-domain features with enhanced preprocessing:
-    - Normalization (zero mean, unit variance)
-    - Skewness and kurtosis
-    - Peak/RMS ratios
-    - Statistical moments
-    - Correlation analysis
-    - Zero-crossing rate
-    - Entropy measures
-    """
-    # Calculate autocorrelation
-    autocorr = np.correlate(x, x, mode='full')[len(x)-1:]
-    autocorr /= autocorr[0]
-    
+    """Extract time-domain features from a normalized vibration/current signal."""
     # Calculate statistical features
-    abs_x = np.abs(x)
-    rms = math.sqrt(float(np.mean(x * x)) + 1e-12)
-    peak = float(np.max(abs_x))
-    centered = x - np.mean(x)
-    std = float(np.std(centered) + 1e-12)
-    skew = float(np.mean((centered / std) ** 3))
-    kurtosis = float(np.mean((centered / std) ** 4))
-    mean_abs = float(np.mean(abs_x) + 1e-12)
     abs_x = np.abs(x)
     rms = math.sqrt(float(np.mean(x * x)) + 1e-12)
     peak = float(np.max(abs_x))
@@ -139,6 +122,7 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
 
 
 def _single_sided_spectrum(x: np.ndarray, sample_rate_hz: float) -> tuple[np.ndarray, np.ndarray]:
+    # Compute the positive-frequency power spectrum using a Hanning window.
     window = np.hanning(x.size)
     spectrum = np.abs(np.fft.rfft(x * window)) ** 2
     freqs = np.fft.rfftfreq(x.size, d=1.0 / sample_rate_hz)
@@ -146,6 +130,7 @@ def _single_sided_spectrum(x: np.ndarray, sample_rate_hz: float) -> tuple[np.nda
 
 
 def _spectral_features(power: np.ndarray, freqs: np.ndarray) -> tuple[np.ndarray, list[str]]:
+    # Compute spectral summary statistics and normalized band energies.
     total = float(np.sum(power) + 1e-18)
     probabilities = power / total
     centroid = float(np.sum(freqs * probabilities))
@@ -163,6 +148,7 @@ def _spectral_features(power: np.ndarray, freqs: np.ndarray) -> tuple[np.ndarray
 
 
 def _analytic_envelope(x: np.ndarray) -> np.ndarray:
+    # Compute the analytic signal envelope via FFT-based Hilbert transform.
     spectrum = np.fft.fft(x)
     multiplier = np.zeros(x.size)
     if x.size % 2 == 0:
@@ -182,6 +168,7 @@ def _diagnostic_features(
     shaft_hz: float,
     physics: BearingPhysics,
 ) -> tuple[np.ndarray, list[str], np.ndarray]:
+    # Build diagnostic features around bearing characteristic harmonics and a soft physics target.
     total = float(np.sum(envelope_power[(freqs >= 5.0) & (freqs <= 2000.0)]) + 1e-18)
     characteristic = physics.characteristic_frequencies(shaft_hz)
     values: list[float] = []
@@ -210,6 +197,7 @@ def _diagnostic_features(
 
 class Standardizer:
     def __init__(self) -> None:
+        # Simple standard scaler for feature normalization.
         self.mean_: np.ndarray | None = None
         self.scale_: np.ndarray | None = None
 
@@ -225,4 +213,3 @@ class Standardizer:
 
     def fit_transform(self, x: np.ndarray) -> np.ndarray:
         return self.fit(x).transform(x)
-

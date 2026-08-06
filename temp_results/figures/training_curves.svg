@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420">
+<rect width="100%" height="100%" fill="white"/>
+<text x="450.0" y="32" text-anchor="middle" font-size="20" font-weight="bold">Training curves</text>
+<text x="450.0" y="52" text-anchor="middle" font-size="13">Loss and accuracy over epochs</text>
+<line x1="70" y1="60" x2="70" y2="350" stroke="#333"/>
+<line x1="70" y1="350" x2="860" y2="350" stroke="#333"/>
+<polyline points="70.0,nan 860.0,nan" fill="none" stroke="#d32f2f" stroke-width="2"/>
+<polyline points="70.0,277.5 860.0,277.5" fill="none" stroke="#1976d2" stroke-width="2"/>
+<text x="78" y="76" font-size="12" fill="#d32f2f">Loss</text>
+<text x="138" y="76" font-size="12" fill="#1976d2">Accuracy</text>
+<text x="70" y="374" font-size="12">Epoch 1</text>
+<text x="820" y="374" font-size="12">Epoch 2</text>
+<text x="20" y="66" font-size="11">High</text>
+<text x="20" y="354" font-size="11">Low</text>
+</svg>

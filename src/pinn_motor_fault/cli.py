@@ -58,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        # Dispatch CLI subcommands to the appropriate pipeline function.
         if args.command == "download":
             archives = download_archives(args.codes, args.raw_dir, overwrite=args.overwrite)
             for archive in archives:
@@ -69,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "train":
+            # Train model from extracted Paderborn files and optionally save weights.
             result = train_from_paderborn(
                 data_dir=args.data_dir,
                 output_path=args.output,
@@ -85,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "smoke":
+            # Run a synthetic smoke test to verify training and saving flow.
             windows, labels, sources = make_synthetic_dataset(samples_per_class=16)
             result = train_from_windows(windows, labels, sources, output_path=args.output, epochs=args.epochs)
             print(f"train_accuracy={result.train_accuracy:.3f} test_accuracy={result.test_accuracy:.3f}")
@@ -92,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "results":
+            # Load a trained model and emit evaluation artifacts for a dataset.
             metrics = generate_results(
                 data_dir=args.data_dir,
                 model_path=args.model,
@@ -107,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "experiment":
+            # Run grouped experiment with a held-out source-file split.
             result = run_grouped_experiment(
                 data_dir=args.data_dir,
                 model_path=args.model,

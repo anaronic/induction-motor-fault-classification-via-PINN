@@ -1,0 +1,17 @@
+source,actual,predicted,p_healthy,p_inner_race,p_outer_race,p_rolling_element
+N15_M07_F10_SYNTH_healthy_0.mat,healthy,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_healthy_1.mat,healthy,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_healthy_2.mat,healthy,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_healthy_3.mat,healthy,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_inner_race_0.mat,inner_race,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_inner_race_1.mat,inner_race,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_inner_race_2.mat,inner_race,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_inner_race_3.mat,inner_race,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_outer_race_0.mat,outer_race,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_outer_race_1.mat,outer_race,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_outer_race_2.mat,outer_race,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_outer_race_3.mat,outer_race,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_rolling_element_0.mat,rolling_element,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_rolling_element_1.mat,rolling_element,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_rolling_element_2.mat,rolling_element,healthy,nan,nan,nan,nan
+N15_M07_F10_SYNTH_rolling_element_3.mat,rolling_element,healthy,nan,nan,nan,nan

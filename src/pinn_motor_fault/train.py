@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from .features import CLASS_NAMES, BearingPhysics, PhysicsFeatureExtractor
-from .model import PhysicsInformedNN
+from .model import PhysicsInformedNN, TrainingHistory
 from .paderborn import DatasetError, load_paderborn_windows
 from .results import write_evaluation_artifacts
 
@@ -22,6 +22,7 @@ class TrainResult:
     output_path: Path | None
     train_count: int = 0
     test_count: int = 0
+    history: TrainingHistory | None = None
 
 
 def train_from_paderborn(
@@ -35,6 +36,7 @@ def train_from_paderborn(
     synthetic_if_empty: bool = False,
 ) -> TrainResult:
     try:
+        # Load raw Paderborn windows from a directory and optionally fall back to synthetic data.
         windows, labels, sources = load_paderborn_windows(
             data_dir,
             window_size=window_size,
@@ -58,7 +60,7 @@ def train_from_windows(
     balance_classes: bool = True,
 ) -> TrainResult:
     """Train model with optional class balancing.
-    
+
     If balance_classes=True, weights samples inversely proportional to class frequency.
     """
     # Enhanced class balancing with focal loss weighting
@@ -82,7 +84,7 @@ def train_from_windows(
         labels[test_indices],
         batch.physics_targets[test_indices],
     )
-    model.fit(
+    history = model.fit(
         batch.features[train_indices],
         labels[train_indices],
         batch.physics_targets[train_indices],
@@ -102,6 +104,7 @@ def train_from_windows(
         output_path=output_path,
         train_count=int(train_indices.size),
         test_count=int(test_indices.size),
+        history=history,
     )
 
 
@@ -133,7 +136,7 @@ def run_grouped_experiment(
         labels[test_indices],
         batch.physics_targets[test_indices],
     )
-    model.fit(
+    history = model.fit(
         batch.features[train_indices],
         labels[train_indices],
         batch.physics_targets[train_indices],
@@ -185,6 +188,7 @@ def run_grouped_experiment(
         windows=windows[test_indices],
         signal_name=signal_preference,
         settings=settings,
+        training_history=history,
     )
     split_manifest = {
         "train_files": sorted(set(sources[index] for index in train_indices)),
@@ -198,6 +202,7 @@ def run_grouped_experiment(
         output_path=model_path,
         train_count=int(train_indices.size),
         test_count=int(test_indices.size),
+        history=history,
     )
 
 
@@ -208,6 +213,7 @@ def make_synthetic_dataset(
     seed: int = 123,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     rng = np.random.default_rng(seed)
+    # Synthesize simple signals for each class using bearing fault modulation patterns.
     physics = BearingPhysics(sample_rate_hz=sample_rate_hz)
     shaft_hz = 25.0
     times = np.arange(window_size) / sample_rate_hz
@@ -234,6 +240,7 @@ def make_synthetic_dataset(
 
 
 def stratified_split(labels: np.ndarray, test_fraction: float = 0.25, seed: int = 11) -> tuple[np.ndarray, np.ndarray]:
+    # Create a balanced train/test split while preserving class proportions.
     rng = np.random.default_rng(seed)
     train: list[int] = []
     test: list[int] = []
