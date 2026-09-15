@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .features import CLASS_NAMES, BearingPhysics, PhysicsFeatureExtractor
+from .features import CLASS_NAMES, BearingPhysics, PhysicsFeatureExtractor, Standardizer
 from .model import PhysicsInformedNN, TrainingHistory
 from .paderborn import DatasetError, load_paderborn_windows
 from .results import write_evaluation_artifacts
@@ -130,14 +130,18 @@ def run_grouped_experiment(
     batch = extractor.transform(windows, sources)
     train_indices, test_indices = stratified_group_split(labels, sources, test_fraction=test_fraction, seed=17)
 
-    model = PhysicsInformedNN(input_dim=batch.features.shape[1], hidden_dim=48, physics_weight=0.20, learning_rate=0.015)
+    scaler = Standardizer()
+    scaler.fit(batch.features[train_indices])
+    scaled_features = scaler.transform(batch.features)
+
+    model = PhysicsInformedNN(input_dim=scaled_features.shape[1], hidden_dim=48, physics_weight=0.20, learning_rate=0.015)
     validation = (
-        batch.features[test_indices],
+        scaled_features[test_indices],
         labels[test_indices],
         batch.physics_targets[test_indices],
     )
     history = model.fit(
-        batch.features[train_indices],
+        scaled_features[train_indices],
         labels[train_indices],
         batch.physics_targets[train_indices],
         epochs=epochs,
@@ -147,19 +151,19 @@ def run_grouped_experiment(
     )
 
     train_loss, train_acc = model.loss_and_accuracy(
-        batch.features[train_indices],
+        scaled_features[train_indices],
         labels[train_indices],
         batch.physics_targets[train_indices],
     )
     test_loss, test_acc = model.loss_and_accuracy(
-        batch.features[test_indices],
+        scaled_features[test_indices],
         labels[test_indices],
         batch.physics_targets[test_indices],
     )
     model.save(model_path)
 
-    test_predictions = model.predict(batch.features[test_indices])
-    test_probabilities = model.predict_proba(batch.features[test_indices])
+    test_predictions = model.predict(scaled_features[test_indices])
+    test_probabilities = model.predict_proba(scaled_features[test_indices])
     settings = {
         "model_path": str(model_path),
         "data_dir": str(data_dir),

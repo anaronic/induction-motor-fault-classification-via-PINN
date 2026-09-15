@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 
 import numpy as np
+from tqdm import tqdm
 
 OFFICIAL_BASE_URL = "https://groups.uni-paderborn.de/kat/BearingDataCenter/"
 BEARING_CODE_RE = re.compile(r"\b(K(?:00\d|A\d{2}|I\d{2}|B\d{2}))\b", re.IGNORECASE)
@@ -155,7 +156,7 @@ def load_paderborn_windows(
     labels: list[str] = []
     sources: list[str] = []
     skipped: list[tuple[Path, str]] = []
-    for mat_path in mat_files:
+    for mat_path in tqdm(mat_files, desc='Loading .mat files'):
         try:
             signal = load_signal_from_mat(mat_path, signal_preference=signal_preference)
             label = infer_label_from_path(mat_path)

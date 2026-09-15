@@ -6,11 +6,11 @@ from dataclasses import dataclass
 import math
 
 import numpy as np
+from tqdm import tqdm
 
 from .paderborn import parse_shaft_frequency_hz
 
 CLASS_NAMES = ("healthy", "inner_race", "outer_race", "rolling_element")
-
 
 @dataclass(frozen=True)
 class BearingPhysics:
@@ -46,7 +46,7 @@ class PhysicsFeatureExtractor:
         feature_rows: list[np.ndarray] = []
         physics_rows: list[np.ndarray] = []
         names: list[str] | None = None
-        for index, window in enumerate(windows):
+        for index, window in enumerate(tqdm(windows, desc='Extracting features')):
             source = sources[index] if sources and index < len(sources) else None
             shaft_hz = parse_shaft_frequency_hz(source)
             features, feature_names, physics_target = self._one_window(window, shaft_hz)
@@ -96,7 +96,8 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
     mean_abs = float(np.mean(abs_x) + 1e-12)
     # Additional features
     zero_crossings = float(np.sum(np.diff(np.sign(x)) != 0))
-    entropy = -np.sum(x * np.log(x + 1e-12))
+    p = np.abs(x) / (np.sum(np.abs(x)) + 1e-12)
+    entropy = -np.sum(p * np.log(p + 1e-12))
     
     values = np.asarray(
         [
