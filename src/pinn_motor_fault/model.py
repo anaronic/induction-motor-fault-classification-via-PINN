@@ -17,6 +17,20 @@ class TrainingHistory:
 
 
 # Small NumPy-based neural model that combines classification loss with a physics-informed target loss.
+#
+# NOTE ON "PHYSICS-INFORMED" TERMINOLOGY (two unrelated mechanisms exist in
+# this project -- do not conflate them):
+#   - THIS FILE implements Mechanism A: a physics-CONSISTENCY LOSS TERM
+#     (`physics_weight` * MSE against `physics_targets` from features.py),
+#     gated by `use_physics_loss`. This is this project's own design choice,
+#     not from the reference paper.
+#   - Mechanism B is the reference paper's actual "Algorithm 1"
+#     (Li et al., EUSIPCO 2025) -- a FEATURE-SELECTION step with no loss-term
+#     component at all, implemented separately in `paper_features.py`
+#     (`PaperFeatureSelector`). When training on paper-selected features,
+#     use `use_physics_loss=False` / `physics_weight=0.0` here, since the
+#     paper's own loss function is plain cross-entropy.
+#   See `paper_features.py`'s module docstring for the other half of this note.
 class PhysicsInformedNN:
     def __init__(
         self,
@@ -25,10 +39,11 @@ class PhysicsInformedNN:
         class_names: tuple[str, ...] = CLASS_NAMES,
         physics_weight: float = 0.25,
         learning_rate: float = 0.01,
+        use_physics_loss: bool = True,
         seed: int = 7,
     ) -> None:
         """Physics-Informed Neural Network for motor fault detection.
-        
+
         Architecture Details:
         - Input Layer: input_dim features
         - Hidden Layer: hidden_dim units with tanh activation
@@ -37,19 +52,22 @@ class PhysicsInformedNN:
         - Output Layer: len(class_names) units with softmax activation
           - Weight initialization: He initialization
           - Bias initialization: Zero initialization
-        
+
         Training Process:
         - Batch size: 64 (default)
         - Learning rate: 0.01 (default)
         - Physics weight (λ): 0.25 (default)
-        - Loss Function: CrossEntropyLoss + λ * PhysicsLoss
+        - Loss Function: CrossEntropyLoss + λ * PhysicsLoss (only when
+          use_physics_loss=True; otherwise plain CrossEntropyLoss). See the
+          module-level note above for how this differs from the reference
+          paper's "Algorithm 1" feature-selection mechanism.
         - Optimizer: Gradient Descent with momentum
-        
+
         Physics Constraints:
         - Enforces bearing fault frequency characteristics
         - Uses envelope spectrum analysis
         - Harmonic energy constraints
-        
+
         Convergence Criteria:
         - Early stopping based on loss improvement
         - Patience: 5 epochs (default)
@@ -60,6 +78,7 @@ class PhysicsInformedNN:
         self.class_names = tuple(class_names)
         self.physics_weight = physics_weight
         self.learning_rate = learning_rate
+        self.use_physics_loss = use_physics_loss
         rng = np.random.default_rng(seed)
         self.w1 = rng.normal(0.0, np.sqrt(2.0 / input_dim), size=(input_dim, hidden_dim))
         self.b1 = np.zeros(hidden_dim)
@@ -108,6 +127,7 @@ class PhysicsInformedNN:
                     class_names=self.class_names,
                     physics_weight=physics_weight,
                     learning_rate=lr,
+                    use_physics_loss=self.use_physics_loss,
                     seed=0,
                 )
                 trial.standardizer.mean_ = self.standardizer.mean_
@@ -231,7 +251,8 @@ class PhysicsInformedNN:
         ce = -np.mean(np.log(probabilities[np.arange(y_indices.size), y_indices] + 1e-12))
         physics_loss = float(np.mean((probabilities - physics_targets) ** 2))
         accuracy = float(np.mean(np.argmax(probabilities, axis=1) == y_indices))
-        return float(ce + self.physics_weight * physics_loss), accuracy
+        total_loss = ce + self.physics_weight * physics_loss if self.use_physics_loss else ce
+        return float(total_loss), accuracy
 
     def _train_batch(
         self, 
@@ -252,7 +273,7 @@ class PhysicsInformedNN:
             weights = np.array([class_weights[self.class_names[index]] for index in y_indices])
             
         dlogits = (probabilities - one_hot) * weights.reshape(-1, 1) / n
-        if self.physics_weight > 0:
+        if self.use_physics_loss and self.physics_weight > 0:
             dprob = (2.0 * self.physics_weight / n) * (probabilities - physics_targets) * weights.reshape(-1, 1)
             correction = np.sum(dprob * probabilities, axis=1, keepdims=True)
             dlogits += probabilities * (dprob - correction)
@@ -288,7 +309,8 @@ class PhysicsInformedNN:
         physics_loss = float(np.mean((probabilities - physics_targets) ** 2))
         predictions = np.argmax(probabilities, axis=1)
         accuracy = float(np.mean(predictions == y_indices))
-        return float(ce + self.physics_weight * physics_loss), accuracy
+        total_loss = ce + self.physics_weight * physics_loss if self.use_physics_loss else ce
+        return float(total_loss), accuracy
 
     def save(self, path: Path) -> None:
         # Persist trained weights, standardizer parameters, and hyperparameters.
@@ -305,6 +327,7 @@ class PhysicsInformedNN:
             "class_names": np.asarray(self.class_names),
             "physics_weight": np.asarray([self.physics_weight]),
             "learning_rate": np.asarray([self.learning_rate]),
+            "use_physics_loss": np.asarray([self.use_physics_loss]),
         }
         if self.training_history is not None:
             savez_kwargs["history_loss"] = np.asarray(self.training_history.loss, dtype=np.float64)
@@ -321,6 +344,13 @@ class PhysicsInformedNN:
             class_names=tuple(str(item) for item in data["class_names"]),
             physics_weight=float(data["physics_weight"][0]),
             learning_rate=float(data["learning_rate"][0]),
+            use_physics_loss=(
+                bool(data["use_physics_loss"][0])
+                if "use_physics_loss" in data
+                # Backward compatibility with .npz files saved before the
+                # use_physics_algorithm -> use_physics_loss rename.
+                else bool(data["use_physics_algorithm"][0]) if "use_physics_algorithm" in data else True
+            ),
         )
         model.w1 = data["w1"]
         model.b1 = data["b1"]

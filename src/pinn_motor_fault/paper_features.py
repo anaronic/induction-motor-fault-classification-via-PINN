@@ -32,6 +32,18 @@ around:
 
 This is a physics adaptation to the Paderborn bearing problem, not a
 claim that the original paper used bearing frequencies.
+
+Relationship to model.py's `PhysicsInformedNN`:
+    This class performs feature SELECTION only -- it has no relationship to
+    `PhysicsInformedNN`'s `physics_weight` / `use_physics_loss` loss term
+    (see model.py's module-level note). When training on the features this
+    class selects, the model should be run with `use_physics_loss=False`,
+    `physics_weight=0.0`, matching the reference paper's own loss function
+    (plain cross-entropy). See `features.py`'s `BearingPhysics` docstring
+    for the other consumer of the same bearing-frequency constants.
+
+Status: as of this writing this class is exercised by
+Binary_Classification_PINN_Algo.ipynb.
 """
 
 from __future__ import annotations

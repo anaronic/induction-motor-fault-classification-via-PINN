@@ -14,6 +14,23 @@ CLASS_NAMES = ("healthy", "inner_race", "outer_race", "rolling_element")
 
 @dataclass(frozen=True)
 class BearingPhysics:
+    """Bearing characteristic-frequency ratios (BPFO/BPFI/BSF), shared by two
+    unrelated "physics-informed" mechanisms in this project:
+      - `PhysicsFeatureExtractor` below uses it to build `physics_targets`,
+        a soft-label target consumed by `PhysicsInformedNN`'s physics-
+        consistency LOSS TERM (model.py, `use_physics_loss`).
+      - `paper_features.py`'s `PaperFeatureSelector` separately reuses this
+        same dataclass to build its FEATURE-SELECTION candidate frequency
+        set (the reference paper's "Algorithm 1"). That is a different use
+        of the same physics constants, not the same mechanism.
+
+    Caveat: the ratios below are the published values for an SKF 6205
+    bearing; the Paderborn dataset's actual bearing is a 6203 (see
+    HANDOFF.md's "Known bearing-geometry caveat" section). Left uncorrected
+    by project decision -- do not change these ratios as part of unrelated
+    refactoring.
+    """
+
     sample_rate_hz: float = 64_000.0
     bpfo_ratio: float = 3.5848
     bpfi_ratio: float = 5.4152
@@ -37,6 +54,14 @@ class FeatureBatch:
 
 
 class PhysicsFeatureExtractor:
+    """Computes engineered signal features AND `physics_targets` for the
+    physics-consistency loss term used by `model.PhysicsInformedNN`
+    (`use_physics_loss=True`). This is Mechanism A in this project's two
+    "physics-informed" mechanisms -- see model.py's module note and
+    paper_features.py's module docstring for Mechanism B (the reference
+    paper's feature-selection algorithm), which is unrelated to this class.
+    """
+
     def __init__(self, physics: BearingPhysics | None = None) -> None:
         # Use bearing physics constants to derive diagnostic targets from signal metadata.
         self.physics = physics or BearingPhysics()
