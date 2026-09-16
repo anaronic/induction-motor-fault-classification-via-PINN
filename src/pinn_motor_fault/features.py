@@ -109,7 +109,13 @@ class PhysicsFeatureExtractor:
 
 
 def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
-    """Extract time-domain features from a normalized vibration/current signal."""
+    """Extract time-domain features from a normalized vibration/current signal.
+
+    `x` has already been mean-centered and divided by its own std in
+    `_one_window()` before reaching here -- feature names below are
+    prefixed `normalized_` where that matters (e.g. `normalized_mean` is
+    the mean of the already-centered signal, not the raw window's mean).
+    """
     # Calculate statistical features
     abs_x = np.abs(x)
     rms = math.sqrt(float(np.mean(x * x)) + 1e-12)
@@ -122,7 +128,7 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
     # Additional features
     zero_crossings = float(np.sum(np.diff(np.sign(x)) != 0))
     p = np.abs(x) / (np.sum(np.abs(x)) + 1e-12)
-    entropy = -np.sum(p * np.log(p + 1e-12))
+    time_domain_entropy = -np.sum(p * np.log(p + 1e-12))
     
     values = np.asarray(
         [
@@ -137,13 +143,14 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
             rms / mean_abs,
             peak / mean_abs,
             zero_crossings,
-            entropy,
+            time_domain_entropy,
         ],
         dtype=np.float64,
     )
-    names = ["mean", "std", "rms", "peak", "ptp", "skew", "kurtosis", 
+    names = ["normalized_mean", "normalized_std", "normalized_rms", "normalized_peak_amplitude",
+             "normalized_peak_to_peak", "skewness", "kurtosis",
              "crest_factor", "shape_factor", "impulse_factor",
-             "zero_crossings", "entropy"]
+             "zero_crossings", "time_domain_entropy"]
     return values, names
 
 
@@ -169,7 +176,11 @@ def _spectral_features(power: np.ndarray, freqs: np.ndarray) -> tuple[np.ndarray
         mask = (freqs >= low * nyquist) & (freqs < high * nyquist)
         band_energy.append(float(np.sum(power[mask]) / total))
     values = np.asarray([centroid, bandwidth, entropy, *band_energy], dtype=np.float64)
-    names = ["spectral_centroid", "spectral_bandwidth", "spectral_entropy", "band_0_10", "band_10_30", "band_30_60", "band_60_100"]
+    names = [
+        "spectral_centroid", "spectral_bandwidth", "spectral_entropy",
+        "spectral_band_energy_0_10pct_nyquist", "spectral_band_energy_10_30pct_nyquist",
+        "spectral_band_energy_30_60pct_nyquist", "spectral_band_energy_60_100pct_nyquist",
+    ]
     return values, names
 
 
@@ -209,7 +220,7 @@ def _diagnostic_features(
             energy = float(np.sum(envelope_power[mask]) / total)
             harmonic_energies.append(energy)
             values.append(energy)
-            names.append(f"{label}_h{harmonic}_energy")
+            names.append(f"{label}_envelope_h{harmonic}_energy_ratio")
         class_scores[label] = float(np.sum(harmonic_energies))
 
     max_fault_score = max(class_scores["inner_race"], class_scores["outer_race"], class_scores["rolling_element"])
@@ -217,7 +228,7 @@ def _diagnostic_features(
     raw = np.asarray([class_scores[name] for name in CLASS_NAMES], dtype=np.float64)
     physics_target = (raw + 1e-6) / float(np.sum(raw + 1e-6))
     values.extend([shaft_hz, max_fault_score])
-    names.extend(["shaft_frequency_hz", "max_fault_harmonic_energy"])
+    names.extend(["shaft_frequency_hz", "max_fault_class_envelope_energy_ratio"])
     return np.asarray(values, dtype=np.float64), names, physics_target
 
 
