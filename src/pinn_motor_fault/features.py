@@ -112,9 +112,10 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
     """Extract time-domain features from a normalized vibration/current signal.
 
     `x` has already been mean-centered and divided by its own std in
-    `_one_window()` before reaching here -- feature names below are
-    prefixed `normalized_` where that matters (e.g. `normalized_mean` is
-    the mean of the already-centered signal, not the raw window's mean).
+    `_one_window()` before reaching here -- feature names below follow a
+    `featuretype_feature` convention (all prefixed `time_`), with a further
+    `normalized_` qualifier where that matters (e.g. `time_normalized_mean`
+    is the mean of the already-centered signal, not the raw window's mean).
     """
     # Calculate statistical features
     abs_x = np.abs(x)
@@ -128,8 +129,8 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
     # Additional features
     zero_crossings = float(np.sum(np.diff(np.sign(x)) != 0))
     p = np.abs(x) / (np.sum(np.abs(x)) + 1e-12)
-    time_domain_entropy = -np.sum(p * np.log(p + 1e-12))
-    
+    entropy = -np.sum(p * np.log(p + 1e-12))
+
     values = np.asarray(
         [
             float(np.mean(x)),
@@ -143,14 +144,14 @@ def _time_features(x: np.ndarray) -> tuple[np.ndarray, list[str]]:
             rms / mean_abs,
             peak / mean_abs,
             zero_crossings,
-            time_domain_entropy,
+            entropy,
         ],
         dtype=np.float64,
     )
-    names = ["normalized_mean", "normalized_std", "normalized_rms", "normalized_peak_amplitude",
-             "normalized_peak_to_peak", "skewness", "kurtosis",
-             "crest_factor", "shape_factor", "impulse_factor",
-             "zero_crossings", "time_domain_entropy"]
+    names = ["time_normalized_mean", "time_normalized_std", "time_normalized_rms", "time_normalized_peak_amplitude",
+             "time_normalized_peak_to_peak", "time_skewness", "time_kurtosis",
+             "time_crest_factor", "time_shape_factor", "time_impulse_factor",
+             "time_zero_crossings", "time_entropy"]
     return values, names
 
 
@@ -205,7 +206,7 @@ def _diagnostic_features(
     shaft_hz: float,
     physics: BearingPhysics,
 ) -> tuple[np.ndarray, list[str], np.ndarray]:
-    # Build diagnostic features around bearing characteristic harmonics and a soft physics target.
+    # Build diagnostic features (prefixed `diagnostic_`) around bearing characteristic harmonics and a soft physics target.
     total = float(np.sum(envelope_power[(freqs >= 5.0) & (freqs <= 2000.0)]) + 1e-18)
     characteristic = physics.characteristic_frequencies(shaft_hz)
     values: list[float] = []
@@ -220,7 +221,7 @@ def _diagnostic_features(
             energy = float(np.sum(envelope_power[mask]) / total)
             harmonic_energies.append(energy)
             values.append(energy)
-            names.append(f"{label}_envelope_h{harmonic}_energy_ratio")
+            names.append(f"diagnostic_{label}_envelope_h{harmonic}_energy_ratio")
         class_scores[label] = float(np.sum(harmonic_energies))
 
     max_fault_score = max(class_scores["inner_race"], class_scores["outer_race"], class_scores["rolling_element"])
@@ -228,7 +229,7 @@ def _diagnostic_features(
     raw = np.asarray([class_scores[name] for name in CLASS_NAMES], dtype=np.float64)
     physics_target = (raw + 1e-6) / float(np.sum(raw + 1e-6))
     values.extend([shaft_hz, max_fault_score])
-    names.extend(["shaft_frequency_hz", "max_fault_class_envelope_energy_ratio"])
+    names.extend(["diagnostic_shaft_frequency_hz", "diagnostic_max_fault_class_envelope_energy_ratio"])
     return np.asarray(values, dtype=np.float64), names, physics_target
 
 
