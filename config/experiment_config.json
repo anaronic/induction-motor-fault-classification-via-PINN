@@ -1,0 +1,58 @@
+{
+  "bearing": {
+    "type": "6203",
+    "rolling_elements": 8,
+    "rolling_element_diameter_mm": 6.75,
+    "pitch_diameter_mm": 28.55,
+    "contact_angle_deg": 0.0,
+    "source": "Paderborn University Bearing Data Center; 6203 geometry"
+  },
+  "data": {
+    "window_size": 4096,
+    "stride": 2048,
+    "diagnostic_window_investigation_only": [8192, 16384, 32768],
+    "sampling_rates_hz": {
+      "vibration": 64000,
+      "current": 64000,
+      "torque": 4000
+    }
+  },
+  "physics_target": {
+    "method": "raw_vibration_envelope_energy_partition_v1",
+    "frequency_band_hz": [5, 2000],
+    "fault_harmonics": ["BPFO", "BPFI", "BSF"],
+    "band_tolerance": "one_native_fft_bin",
+    "healthy_component": "envelope-spectrum energy outside bearing-fault harmonic bands",
+    "fault_components": "energy assigned to the nearest bearing-fault harmonic",
+    "ground_truth_labels_used": false,
+    "binary_conversion": [
+      "p_healthy",
+      "p_inner_race + p_outer_race + p_rolling_element"
+    ],
+    "calibrated_posterior": false
+  },
+  "preprocessing": "mean_center",
+  "split": {
+    "strategy": "stratified_group_by_mat_file",
+    "test_fraction": 0.25,
+    "seed": 17
+  },
+  "matched_ablation": {
+    "hidden_dim": 48,
+    "learning_rate": 0.015,
+    "batch_size": 64,
+    "epochs": 60,
+    "seed": 17,
+    "class_weights": "balanced_n_samples_over_n_classes_times_class_count"
+  },
+  "experiment_ids": [
+    "M1_binary_baseline",
+    "M2_1_current",
+    "M2_2_vibration",
+    "M2_3_torque",
+    "M3_four_generic_ce",
+    "M4_four_generic_physics",
+    "M5_four_all_ce",
+    "M6_four_all_physics"
+  ]
+}

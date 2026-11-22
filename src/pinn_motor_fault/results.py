@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .features import CLASS_NAMES, PhysicsFeatureExtractor
+from .features import PhysicsFeatureExtractor
 from .model import PhysicsInformedNN, TrainingHistory
 from .paderborn import load_paderborn_windows
 
@@ -82,6 +82,8 @@ def write_evaluation_artifacts(
 
     metrics: dict[str, object] = {
         "accuracy": accuracy,
+        "macro_f1": float(_macro_f1(class_metrics)),
+        "balanced_accuracy": float(_balanced_accuracy(confusion)),
         "class_metrics": class_metrics,
         "class_names": list(model.class_names),
         "class_distribution": {
@@ -139,6 +141,19 @@ def per_class_metrics(confusion: np.ndarray, class_names: tuple[str, ...]) -> di
         f1 = 2.0 * precision * recall / (precision + recall + 1e-12)
         metrics[name] = {"precision": precision, "recall": recall, "f1": f1}
     return metrics
+
+
+def _macro_f1(class_metrics: dict[str, dict[str, float]]) -> float:
+    values = [float(metrics["f1"]) for metrics in class_metrics.values()]
+    return float(np.mean(values)) if values else 0.0
+
+
+def _balanced_accuracy(confusion: np.ndarray) -> float:
+    recalls = []
+    for i in range(confusion.shape[0]):
+        support = float(np.sum(confusion[i, :]))
+        recalls.append(float(confusion[i, i] / (support + 1e-12)))
+    return float(np.mean(recalls)) if recalls else 0.0
 
 
 def write_confusion_csv(path: Path, confusion: np.ndarray, class_names: tuple[str, ...]) -> None:
@@ -223,8 +238,9 @@ def write_confusion_svg(path: Path, confusion: np.ndarray, class_names: tuple[st
 
 def write_signal_examples_svg(path: Path, windows: np.ndarray, labels: np.ndarray, signal_name: str) -> None:
     selected: list[tuple[str, np.ndarray]] = []
-    for class_name in CLASS_NAMES:
-        indices = np.flatnonzero(labels == class_name)
+    class_names = list(dict.fromkeys(str(label) for label in labels))
+    for class_name in class_names:
+        indices = np.flatnonzero(labels.astype(str) == class_name)
         if indices.size:
             selected.append((class_name, windows[int(indices[0])][:512]))
     width = 900

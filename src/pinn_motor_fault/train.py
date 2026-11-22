@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -10,7 +11,9 @@ import numpy as np
 
 from .features import CLASS_NAMES, BearingPhysics, PhysicsFeatureExtractor, Standardizer
 from .model import PhysicsInformedNN, TrainingHistory
-from .paderborn import DatasetError, load_paderborn_windows
+from .fast_train import fast_fit, compute_class_weights
+from .paderborn import DatasetError, load_paderborn_windows, parse_shaft_frequency_hz
+from .paper_features import PaperFeatureSelector
 from .results import write_evaluation_artifacts
 
 
@@ -68,9 +71,9 @@ def train_from_windows(
     if balance_classes:
         class_counts = {label: np.sum(labels == label) for label in CLASS_NAMES}
         total_samples = len(labels)
-        # Inverse frequency weighting with focal loss adjustment (gamma=2)
+        # Standard balanced weighting: n_samples / (n_classes * class_count)
         class_weights = {
-            label: (total_samples/(len(class_counts)*count)) * (1 - (count/total_samples))**2 
+            label: float(total_samples / (len(class_counts) * count))
             for label, count in class_counts.items()
         }
         print(f"Using class weights: {class_weights}")
@@ -210,6 +213,301 @@ def run_grouped_experiment(
     )
 
 
+def run_experiment(
+    windows: np.ndarray,
+    labels: np.ndarray,
+    sources: list[str],
+    output_dir: Path,
+    *,
+    task: str = "four",
+    feature_group: str = "generic",
+    use_physics_loss: bool = False,
+    physics_weight: float = 0.0,
+    hidden_dim: int = 48,
+    learning_rate: float = 0.015,
+    batch_size: int = 64,
+    epochs: int = 60,
+    seed: int = 17,
+    preprocessing: str = "mean_center",
+    split_manifest: Path | Mapping[str, object] | None = None,
+    experiment_id: str | None = None,
+    dataset_name: str = "provided_windows",
+) -> dict[str, object]:
+    """Reusable fixed-budget experiment entry point."""
+    _prepare_output_directory(output_dir)
+    if task not in {"binary", "four"}:
+        raise ValueError("task must be 'binary' or 'four'")
+    if task == "binary":
+        labels = binary_labels(labels)
+        class_names = ("healthy", "faulty")
+    else:
+        class_names = CLASS_NAMES
+
+    if split_manifest is None:
+        train_indices, test_indices = stratified_group_split(
+            labels, sources, test_fraction=0.25, seed=seed
+        )
+    else:
+        train_indices, test_indices = _indices_from_split_manifest(sources, split_manifest)
+    assert_group_split_no_overlap(sources, train_indices, test_indices)
+
+    batch = PhysicsFeatureExtractor(
+        BearingPhysics(),
+        preprocessing=preprocessing,
+        feature_group=feature_group,
+    ).transform(windows, sources)
+    features = batch.features
+    physics_targets = batch.physics_targets
+    if task == "binary":
+        physics_targets = np.column_stack([
+            physics_targets[:, 0],
+            np.sum(physics_targets[:, 1:], axis=1),
+        ])
+    weights = compute_class_weights(labels[train_indices], class_names)
+    model = PhysicsInformedNN(
+        input_dim=features.shape[1],
+        hidden_dim=hidden_dim,
+        class_names=class_names,
+        physics_weight=physics_weight if use_physics_loss else 0.0,
+        learning_rate=learning_rate,
+        use_physics_loss=use_physics_loss,
+        seed=seed,
+    )
+    fast_fit(
+        model,
+        features[train_indices],
+        labels[train_indices],
+        physics_targets[train_indices],
+        features[test_indices],
+        labels[test_indices],
+        physics_targets[test_indices],
+        epochs=epochs,
+        batch_size=batch_size,
+        class_weights=weights,
+        verbose=True,
+    )
+
+    predictions = model.predict(features[test_indices])
+    probabilities = model.predict_proba(features[test_indices])
+    model_path = output_dir / "model.npz"
+    model.save(model_path)
+    settings = {
+        "experiment_id": experiment_id or output_dir.name,
+        "dataset": dataset_name,
+        "task": task,
+        "feature_group": feature_group,
+        "use_physics_loss": use_physics_loss,
+        "physics_weight": float(model.physics_weight),
+        "hidden_dim": hidden_dim,
+        "learning_rate": learning_rate,
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "seed": seed,
+        "preprocessing": preprocessing,
+        "class_weights": weights,
+        "split_strategy": "stratified_group_by_mat_file",
+        "source_recordings": sorted(set(str(Path(source)) for source in sources)),
+        "train_recordings": sorted(set(str(Path(sources[i])) for i in train_indices)),
+        "test_recordings": sorted(set(str(Path(sources[i])) for i in test_indices)),
+        "physics_target_method": "raw_vibration_envelope_energy_partition_v1",
+    }
+    (output_dir / "config.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    (output_dir / "split_manifest.json").write_text(json.dumps({
+        "train_files": settings["train_recordings"],
+        "test_files": settings["test_recordings"],
+        "source_recordings": settings["source_recordings"],
+        "seed": seed,
+        "strategy": "stratified_group_by_mat_file",
+    }, indent=2), encoding="utf-8")
+    return write_evaluation_artifacts(
+        output_dir=output_dir,
+        labels=labels[test_indices],
+        predictions=predictions,
+        probabilities=probabilities,
+        sources=[sources[i] for i in test_indices],
+        model=model,
+        feature_names=batch.feature_names,
+        windows=windows[test_indices],
+        signal_name="paderborn",
+        settings=settings,
+        training_history=model.training_history,
+    )
+
+
+def run_paper_feature_experiment(
+    windows: np.ndarray,
+    labels: np.ndarray,
+    sources: list[str],
+    output_dir: Path,
+    *,
+    modality: str,
+    sample_rate_hz: float,
+    skipped: list[dict[str, str]] | None = None,
+    epochs: int = 60,
+    batch_size: int = 64,
+    hidden_dim: int = 48,
+    learning_rate: float = 0.015,
+    seed: int = 17,
+    tau: float = 1.0,
+    dataset_name: str = "provided_windows",
+) -> dict[str, object]:
+    """Run a recording-level binary Li-inspired feature-selection experiment."""
+    _prepare_output_directory(output_dir)
+    if len(sources) != len(labels) or windows.shape[0] != labels.size:
+        raise ValueError("windows, labels, and sources must have matching lengths.")
+    if modality not in {"current", "vibration", "torque"}:
+        raise ValueError(f"Unsupported modality: {modality}")
+
+    labels = binary_labels(labels)
+    train_indices, test_indices = stratified_group_split(
+        labels, sources, test_fraction=0.25, seed=seed
+    )
+    assert_group_split_no_overlap(sources, train_indices, test_indices)
+    physics = BearingPhysics(sample_rate_hz=sample_rate_hz)
+    shaft_frequencies = np.asarray(
+        [parse_shaft_frequency_hz(sources[int(i)]) for i in train_indices],
+        dtype=np.float64,
+    )
+    selector = PaperFeatureSelector(sample_rate_hz=sample_rate_hz, tau=tau)
+    selector.fit(
+        windows[train_indices],
+        labels[train_indices],
+        shaft_hz=shaft_frequencies,
+        physics=physics,
+    )
+    features = selector.transform(windows)
+    class_names = ("healthy", "faulty")
+    class_weights = compute_class_weights(labels[train_indices], class_names)
+    model = PhysicsInformedNN(
+        input_dim=features.shape[1],
+        hidden_dim=hidden_dim,
+        class_names=class_names,
+        physics_weight=0.0,
+        learning_rate=learning_rate,
+        use_physics_loss=False,
+        seed=seed,
+    )
+    physics_targets = np.zeros((labels.size, len(class_names)), dtype=np.float64)
+    fast_fit(
+        model,
+        features[train_indices],
+        labels[train_indices],
+        physics_targets[train_indices],
+        features[test_indices],
+        labels[test_indices],
+        physics_targets[test_indices],
+        epochs=epochs,
+        batch_size=batch_size,
+        class_weights=class_weights,
+        verbose=True,
+    )
+    predictions = model.predict(features[test_indices])
+    probabilities = model.predict_proba(features[test_indices])
+    source_recordings = sorted(set(str(Path(source)) for source in sources))
+    train_recordings = sorted(set(str(Path(sources[i])) for i in train_indices))
+    test_recordings = sorted(set(str(Path(sources[i])) for i in test_indices))
+    settings: dict[str, object] = {
+        "experiment_id": output_dir.name,
+        "dataset": dataset_name,
+        "task": "binary",
+        "modality": modality,
+        "sample_rate_hz": float(sample_rate_hz),
+        "window_size": int(windows.shape[1]),
+        "frequency_resolution_hz": float(sample_rate_hz / windows.shape[1]),
+        "feature_method": "li_inspired_training_only_frequency_selection",
+        "selected_feature_count": int(features.shape[1]),
+        "tau": float(tau),
+        "hidden_dim": hidden_dim,
+        "learning_rate": learning_rate,
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "seed": seed,
+        "class_weights": class_weights,
+        "split_strategy": "stratified_group_by_mat_file",
+        "source_recordings": source_recordings,
+        "train_recordings": train_recordings,
+        "test_recordings": test_recordings,
+        "skipped_recordings": skipped or [],
+    }
+    model.save(output_dir / "model.npz")
+    (output_dir / "config.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    (output_dir / "split_manifest.json").write_text(json.dumps({
+        "train_files": train_recordings,
+        "test_files": test_recordings,
+        "source_recordings": source_recordings,
+        "seed": seed,
+        "strategy": "stratified_group_by_mat_file",
+    }, indent=2), encoding="utf-8")
+    (output_dir / "selected_bins.json").write_text(json.dumps({
+        "frequency_hz": selector.selected_freqs.tolist(),
+        "difference_scores": selector.diff_scores.tolist(),
+        "feature_names": selector.feature_names(),
+        "tau": tau,
+        "physics_bin_indices": selector.selected_indices.tolist(),
+    }, indent=2), encoding="utf-8")
+    return write_evaluation_artifacts(
+        output_dir=output_dir,
+        labels=labels[test_indices],
+        predictions=predictions,
+        probabilities=probabilities,
+        sources=[sources[i] for i in test_indices],
+        model=model,
+        feature_names=selector.feature_names(),
+        windows=windows[test_indices],
+        signal_name=modality,
+        settings=settings,
+        training_history=model.training_history,
+    )
+
+
+def _prepare_output_directory(output_dir: Path) -> None:
+    if output_dir.exists() and not output_dir.is_dir():
+        raise FileExistsError(f"Experiment output path is not a directory: {output_dir}")
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise FileExistsError(
+            f"Experiment output directory already contains files; refusing to overwrite: {output_dir}"
+        )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _indices_from_split_manifest(
+    sources: list[str],
+    manifest: Path | Mapping[str, object],
+) -> tuple[np.ndarray, np.ndarray]:
+    if isinstance(manifest, Path):
+        manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    else:
+        manifest_data = manifest
+    train_files = manifest_data.get("train_files")
+    test_files = manifest_data.get("test_files")
+    if not isinstance(train_files, list) or not isinstance(test_files, list):
+        raise ValueError("Split manifest must contain train_files and test_files lists.")
+    normalize = lambda value: str(Path(str(value)).resolve())
+    train_set = {normalize(path) for path in train_files}
+    test_set = {normalize(path) for path in test_files}
+    if train_set & test_set:
+        raise ValueError("Split manifest has recording overlap between train_files and test_files.")
+    source_set = {normalize(source) for source in sources}
+    if train_set | test_set != source_set:
+        missing = sorted(source_set - (train_set | test_set))
+        extra = sorted((train_set | test_set) - source_set)
+        raise ValueError(
+            f"Split manifest population does not match loaded recordings; "
+            f"missing={missing[:5]}, extra={extra[:5]}."
+        )
+    train_indices = np.asarray(
+        [index for index, source in enumerate(sources) if normalize(source) in train_set],
+        dtype=np.int64,
+    )
+    test_indices = np.asarray(
+        [index for index, source in enumerate(sources) if normalize(source) in test_set],
+        dtype=np.int64,
+    )
+    if not train_indices.size or not test_indices.size:
+        raise ValueError("Split manifest must assign at least one window to both partitions.")
+    return train_indices, test_indices
+
+
 def make_synthetic_dataset(
     samples_per_class: int = 32,
     window_size: int = 4096,
@@ -285,3 +583,21 @@ def stratified_group_split(
     train_indices = [index for group in sorted(train_groups) for index in group_to_indices[group]]
     test_indices = [index for group in sorted(test_groups) for index in group_to_indices[group]]
     return np.asarray(train_indices, dtype=np.int64), np.asarray(test_indices, dtype=np.int64)
+
+
+def assert_group_split_no_overlap(
+    sources: list[str],
+    train_indices: np.ndarray,
+    test_indices: np.ndarray,
+) -> None:
+    """Raise if recording identifiers occur in both split partitions."""
+    train_files = {str(Path(sources[int(i)])) for i in train_indices}
+    test_files = {str(Path(sources[int(i)])) for i in test_indices}
+    overlap = sorted(train_files & test_files)
+    if overlap:
+        raise ValueError(f"Recording-level split leakage detected: {overlap}")
+
+
+def binary_labels(labels: np.ndarray) -> np.ndarray:
+    labels = np.asarray(labels)
+    return np.asarray(["healthy" if str(label) == "healthy" else "faulty" for label in labels])

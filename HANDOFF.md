@@ -25,22 +25,23 @@ Package: `src/pinn_motor_fault/` (installed editable via `pip install -e .`)
 - `paderborn.py` — downloads/loads Paderborn `.mat` files into windowed
   signal arrays. `load_paderborn_windows()` is the main entry point.
 - `features.py` — `PhysicsFeatureExtractor` computes ~36 time/spectral/
-  envelope-harmonic features per window, plus `physics_targets` (a 4-column
-  soft target per window derived from bearing characteristic-frequency
-  harmonic energies, used by the physics-consistency loss).
+  envelope-harmonic features per window. Physics targets are generated
+  separately from each raw vibration window: normalized envelope-spectrum
+  energy outside bearing-fault harmonic bands is the healthy component, and
+  energy within a band is assigned to its nearest BPFO/BPFI/BSF harmonic.
+  The target is independent of feature group and ground-truth labels; it is a
+  spectral-consistency proxy, not a calibrated posterior.
 - `model.py` — `PhysicsInformedNN`: small NumPy feedforward net (tanh hidden
   layer, softmax output). `class_names` is a constructor param — output layer
   size is `len(class_names)`, so it supports both the original 4-class
-  setup and the newer binary setup without code changes. `.fit()` runs an
-  internal **25-combination hyperparameter grid search** (5 learning rates ×
-  5 physics weights, each trained for the full epoch count) before final
-  training — this is expensive and was bypassed today via `fast_train.py`.
+  setup and the newer binary setup without code changes. `.fit()` now trains
+  once with the explicitly configured learning rate and physics weight;
+  `fast_train.py` provides the same fixed-hyperparameter path as a convenience.
   Has its own internal `Standardizer` (fit inside `.fit()`/`fast_fit()`).
 - `fast_train.py` — **added today**. `fast_fit()` trains without the grid
   search (fixed hyperparameters, single pass) for time-constrained runs.
-  `compute_class_weights()` factors out the inverse-frequency + focal-loss
-  class-weighting formula so every model in a comparison uses the same
-  scheme.
+  `compute_class_weights()` uses the standard balanced formula
+  `n_samples / (n_classes * class_count)`; it does not use focal weighting.
 - `paper_features.py` — **added today, updated since**. `PaperFeatureSelector`
   implements a 4-class-adapted (now also binary-compatible) one-vs-rest
   version of Algorithm 1 from the reference paper (Li et al., EUSIPCO 2025):
@@ -52,10 +53,14 @@ Package: `src/pinn_motor_fault/` (installed editable via `pip install -e .`)
   has been replaced. If `tau` selects zero features, `fit()` raises
   `RuntimeError` with the max observed difference, rather than silently
   falling back to arbitrary bins.
-- `train.py` — original training entry points (`train_from_paderborn`,
-  `train_from_windows`, `run_grouped_experiment`) using the full grid search.
+- `train.py` — training entry points (`train_from_paderborn`,
+  `train_from_windows`, `run_grouped_experiment`) use explicit fixed training
+  settings.
   `stratified_group_split()` here is the standard train/test split used
   everywhere — splits by `.mat` file/source, not by window, to avoid leakage.
+  Final `run_experiment()` calls can load a fixed split manifest and refuse
+  non-empty output directories. `run_paper_feature_experiment()` implements
+  the M2 training-only frequency selection and per-modality artifacts.
 - `results.py` — `write_evaluation_artifacts()` generates metrics.json,
   confusion_matrix.csv/svg, feature_importance.csv/svg (weight-magnitude
   method — see below), class_metrics.csv, training_curves.svg,
@@ -84,29 +89,22 @@ Package: `src/pinn_motor_fault/` (installed editable via `pip install -e .`)
    both standardization layers are needed or if the outer one in
    `run_grouped_experiment` should be removed.
 
-## Known bearing-geometry caveat (not yet fixed)
+## Corrected bearing geometry
 
-`BearingPhysics` in `features.py` hardcodes BPFO/BPFI/BSF ratios
-(3.5848 / 5.4152 / 2.3570) that are the published values for an **SKF 6205**
-bearing (commonly cited from the CWRU dataset). The Paderborn dataset's
-actual bearing is a **type 6203** (per Lessmeier et al. 2016, the dataset's
-own reference paper), which has different geometry and therefore different
-true characteristic-frequency ratios. This means the physics-target /
-harmonic-energy features may be computed around the wrong frequencies.
-**Not yet corrected** — either find the actual 6203 geometry (ball count,
-ball diameter, pitch diameter, contact angle) and recompute the ratios via
-the standard BPFO/BPFI/BSF formulas, or document this as an explicit
-limitation.
+`BearingPhysics` now derives all characteristic-frequency ratios from one
+central `BearingGeometry6203` definition: 8 rolling elements, 6.75 mm rolling
+element diameter, 28.55 mm pitch diameter and 0-degree contact angle.
+Source: Paderborn University Bearing Data Center 6203 geometry. This central
+geometry is shared by physics-feature extraction and paper-inspired
+frequency selection.
 
 ## Project scope change (mid-session, per professor feedback)
 
-The project moved from 4-class (healthy / inner_race / outer_race /
-rolling_element) to **binary classification** (healthy vs. faulty, with
-inner/outer/rolling collapsed into "faulty"), specifically so results can be
-compared against the reference paper's binary classifier. This is the
-current, authoritative scope — **any earlier 4-class results/heatmaps/SHAP
-outputs from earlier today are superseded and should not be mixed with
-binary results.**
+The experiment program now includes both binary classification and a
+controlled four-class ablation. M1 and M2 are binary; M3-M6 compare generic
+versus all engineered features and cross-entropy versus physics-consistency
+loss. Older binary notebooks below remain historical artifacts and are not
+the seven final experiment notebooks.
 
 Binary conversion recipe (used in both binary notebooks below):
 ```python
@@ -117,7 +115,7 @@ binary_physics_targets = np.column_stack([
 ])  # each row already sums to 1, no renormalization needed
 ```
 
-## Current comparison design (3-way, binary)
+## Historical binary notebook comparison (not the final seven-notebook plan)
 
 | Notebook | Features | use_physics_loss / physics_weight | Purpose |
 |---|---|---|---|
@@ -131,7 +129,7 @@ All three must share: same `stratified_group_split(..., seed=17)`, same
 attributable to the one intended variable (loss formulation or feature set),
 not incidental hyperparameter drift.
 
-## Bugs found in the two existing binary notebooks (fix before running)
+## Notes on older binary notebooks
 
 **`Binary_Classification_Baseline.ipynb`**: `plt` (matplotlib) is never
 imported anywhere, but the final SHAP cell calls `plt.tight_layout()` /
@@ -170,58 +168,28 @@ then `.transform(windows)` on the full array), `use_physics_loss=False`,
 computed via a throwaway `PhysicsFeatureExtractor` call whose 36 engineered
 features are discarded — only its `physics_targets` output is used.
 
-## User has just said "I have sufficient time now"
+## Final experiment status
 
-Earlier work today was done under a 2-hour deadline, so several shortcuts
-were taken deliberately and documented as limitations rather than fixed:
+The final notebooks are regenerated by `scripts/generate_notebooks.py`.
+Notebook 00 freezes the real vibration recording split in
+`reports/shared/split_manifest.json`; M1 and M3-M6 must reuse that exact
+manifest. M2 creates separate per-modality recording populations and splits.
+Its metrics are directly comparable only where source populations and split
+assignments match. The eight experiment IDs/output folders are listed in
+`README.md`.
 
-1. **`fast_fit()` bypasses the 25-combination grid search** — fixed,
-   guessed hyperparameters (`learning_rate=0.015`, `physics_weight=0.20`)
-   were used instead of tuned ones. **Now that time isn't tight, prefer
-   `model.fit()` (the real grid search) for the actual final comparison
-   runs**, or at minimum run a cheap grid search on a data subsample (see
-   below) to get real tuned values instead of guesses.
-2. **`max_windows_per_file=30`** was used instead of fuller coverage.
-   Earlier same-day experiments (4-class, before the binary pivot) showed
-   accuracy and feature-importance rankings were stable between 16 and 60
-   windows/file — so 30–60 is defensible, but exhaustive coverage (~123
-   windows/file for a ~4s recording at this window size/stride) was never
-   tried and is now affordable time-wise if desired.
-3. **`PaperFeatureSelector.top_k=20`** is a fixed guess substituting for the
-   paper's threshold-τ selection criterion — worth trying an actual τ sweep
-   now, or at least trying a couple different top_k values to check
-   sensitivity.
-4. **SHAP was run on small samples** (~100–150 test windows,
-   `KernelExplainer`/`shap.Explainer` with a small background set) purely
-   for speed. Can be scaled up now.
+Do not run the full experiments until the final pre-experiment checks are
+accepted. Notebook loading errors propagate; the final experiment notebooks
+do not use a synthetic-data fallback. Synthetic data is confined to tests,
+the CLI smoke command, and notebook 00's explicitly opt-in feature-extraction
+smoke section. A non-empty experiment output folder is never overwritten.
 
-A subsample-based grid search approach was proposed (run the real 25-combo
-search on ~3000 training windows instead of the full set, extract
-`model.learning_rate` / `model.physics_weight` after fitting, then reuse
-those values for full-data training via `fast_fit`) — this was not yet
-executed. Consider whether to do this, or just run the full grid search
-directly on the full data now that time allows.
+The current 4096-sample generic baseline remains unchanged. At 64 kHz its
+true resolution is 15.625 Hz; longer diagnostic windows are reported as
+separate candidates, and zero-padding is not described as improving
+resolution.
 
-## Immediate next steps (suggested)
-
-1. ~~Fix the two known bugs in the existing binary notebooks~~ — the
-   Baseline notebook's missing `matplotlib` import is still open; the
-   `PhysicsWeight` notebook's two bugs turned out to be already fixed (see
-   above).
-2. Decide with the user: full grid search per model, or subsample-search-
-   then-reuse, given more time is available now.
-3. ~~Build the missing paper-algorithm binary notebook~~ — built, see
-   "Paper-algorithm binary notebook (built)" above.
-4. Run all three binary notebooks to completion, save all three
-   `metrics.json` / `confusion_matrix.csv` / `feature_importance.csv`
-   outputs.
-5. Build a final comparison: a metrics heatmap (accuracy, precision,
-   recall, F1 for the binary "faulty" class) across the three notebooks,
-   plus a SHAP-vs-weight-magnitude importance comparison for at least the
-   Baseline and PINN notebooks (same model, two importance methods).
-6. Optionally address the bearing-geometry (6205 vs 6203) caveat if time
-   allows — would strengthen the "physics-informed" claims in the report.
-7. Any local code changes need to be re-zipped and re-uploaded to Kaggle as
+Any local code changes need to be re-zipped and re-uploaded to Kaggle as
    a new dataset (the "New Version" button on the existing
    `pinn-motor-fault-code` / `-v2` dataset could not be located in the
    Kaggle UI during this session — uploading as a further new dataset,

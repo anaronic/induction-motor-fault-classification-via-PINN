@@ -203,7 +203,7 @@ class PaperFeatureSelector:
         self,
         windows: np.ndarray,
         labels: np.ndarray,
-        shaft_hz: float | None = None,
+        shaft_hz: float | np.ndarray | None = None,
         physics: BearingPhysics | None = None,
     ) -> "PaperFeatureSelector":
         """Fit the Algorithm-1-style selector on TRAINING data only.
@@ -240,9 +240,14 @@ class PaperFeatureSelector:
         physics = physics or BearingPhysics(
             sample_rate_hz=self.sample_rate_hz
         )
+        self.sample_rate_hz = float(physics.sample_rate_hz)
 
         if shaft_hz is None:
-            shaft_hz = 25.0
+            shaft_frequencies = np.asarray([25.0], dtype=np.float64)
+        else:
+            shaft_frequencies = np.asarray(shaft_hz, dtype=np.float64).reshape(-1)
+            if shaft_frequencies.size == 0 or np.any(shaft_frequencies <= 0):
+                raise ValueError("shaft_hz must contain one or more positive frequencies.")
 
         # ------------------------------------------------------------
         # Step 1: magnitude spectra
@@ -252,11 +257,9 @@ class PaperFeatureSelector:
         # ------------------------------------------------------------
         # Step 2: identify physics-defined bins B
         # ------------------------------------------------------------
-        physics_mask = self._physics_bin_mask(
-            freqs,
-            shaft_hz,
-            physics,
-        )
+        physics_mask = np.zeros(freqs.size, dtype=bool)
+        for frequency in np.unique(shaft_frequencies):
+            physics_mask |= self._physics_bin_mask(freqs, float(frequency), physics)
 
         physics_indices = np.flatnonzero(physics_mask)
 
@@ -392,7 +395,7 @@ class PaperFeatureSelector:
         self,
         windows: np.ndarray,
         labels: np.ndarray,
-        shaft_hz: float | None = None,
+        shaft_hz: float | np.ndarray | None = None,
         physics: BearingPhysics | None = None,
     ) -> np.ndarray:
         """Fit selector and transform the supplied windows."""

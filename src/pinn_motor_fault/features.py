@@ -13,37 +13,76 @@ from .paderborn import parse_shaft_frequency_hz
 CLASS_NAMES = ("healthy", "inner_race", "outer_race", "rolling_element")
 
 @dataclass(frozen=True)
-class BearingPhysics:
-    """Bearing characteristic-frequency ratios (BPFO/BPFI/BSF), shared by two
-    unrelated "physics-informed" mechanisms in this project:
-      - `PhysicsFeatureExtractor` below uses it to build `physics_targets`,
-        a soft-label target consumed by `PhysicsInformedNN`'s physics-
-        consistency LOSS TERM (model.py, `use_physics_loss`).
-      - `paper_features.py`'s `PaperFeatureSelector` separately reuses this
-        same dataclass to build its FEATURE-SELECTION candidate frequency
-        set (the reference paper's "Algorithm 1"). That is a different use
-        of the same physics constants, not the same mechanism.
+class BearingGeometry6203:
+    """Paderborn 6203 bearing geometry.
 
-    Caveat: the ratios below are the published values for an SKF 6205
-    bearing; the Paderborn dataset's actual bearing is a 6203 (see
-    HANDOFF.md's "Known bearing-geometry caveat" section). Left uncorrected
-    by project decision -- do not change these ratios as part of unrelated
-    refactoring.
+    Values are retained for reproducibility and are derived from the standard
+    rolling-element bearing characteristic-frequency equations.
     """
 
+    rolling_elements: int = 8
+    rolling_element_diameter_mm: float = 6.75
+    pitch_diameter_mm: float = 28.55
+    contact_angle_deg: float = 0.0
+
+    source: str = "Paderborn University Bearing Data Center; 6203 geometry"
+
+
+@dataclass(frozen=True)
+class BearingPhysics:
+    """Corrected 6203 characteristic-frequency ratios and spectral settings."""
+
+    geometry: BearingGeometry6203 = BearingGeometry6203()
     sample_rate_hz: float = 64_000.0
-    bpfo_ratio: float = 3.5848
-    bpfi_ratio: float = 5.4152
-    bsf_ratio: float = 2.3570
     harmonic_count: int = 5
-    tolerance_hz: float = 4.0
+    tolerance_hz: float | None = None
+
+    @property
+    def bpfo_ratio(self) -> float:
+        theta = math.radians(self.geometry.contact_angle_deg)
+        ratio = self.geometry.rolling_element_diameter_mm / self.geometry.pitch_diameter_mm
+        return (self.geometry.rolling_elements / 2.0) * (1.0 - ratio * math.cos(theta))
+
+    @property
+    def bpfi_ratio(self) -> float:
+        theta = math.radians(self.geometry.contact_angle_deg)
+        ratio = self.geometry.rolling_element_diameter_mm / self.geometry.pitch_diameter_mm
+        return (self.geometry.rolling_elements / 2.0) * (1.0 + ratio * math.cos(theta))
+
+    @property
+    def bsf_ratio(self) -> float:
+        theta = math.radians(self.geometry.contact_angle_deg)
+        d = self.geometry.rolling_element_diameter_mm
+        D = self.geometry.pitch_diameter_mm
+        ratio = d / D
+        return (D / (2.0 * d)) * (1.0 - (ratio * math.cos(theta)) ** 2)
+
+    @property
+    def ftf_ratio(self) -> float:
+        theta = math.radians(self.geometry.contact_angle_deg)
+        ratio = self.geometry.rolling_element_diameter_mm / self.geometry.pitch_diameter_mm
+        return 0.5 * (1.0 - ratio * math.cos(theta))
 
     def characteristic_frequencies(self, shaft_hz: float) -> dict[str, float]:
+        if shaft_hz <= 0:
+            raise ValueError("shaft_hz must be positive.")
         return {
             "outer_race": self.bpfo_ratio * shaft_hz,
             "inner_race": self.bpfi_ratio * shaft_hz,
             "rolling_element": self.bsf_ratio * shaft_hz,
+            "shaft": shaft_hz,
+            "ftf": self.ftf_ratio * shaft_hz,
         }
+
+    def frequency_resolution_hz(self, window_size: int) -> float:
+        if window_size <= 0:
+            raise ValueError("window_size must be positive.")
+        return float(self.sample_rate_hz / window_size)
+
+    def diagnostic_tolerance_hz(self, window_size: int) -> float:
+        if self.tolerance_hz is not None:
+            return float(self.tolerance_hz)
+        return float(self.frequency_resolution_hz(window_size))
 
 
 @dataclass
@@ -51,6 +90,11 @@ class FeatureBatch:
     features: np.ndarray
     physics_targets: np.ndarray
     feature_names: list[str]
+    preprocessing: str = "mean_center"
+    feature_group: str = "all"
+    sample_rate_hz: float = 64_000.0
+    shaft_frequencies_hz: np.ndarray | None = None
+    geometry: dict[str, float | int | str] | None = None
 
 
 class PhysicsFeatureExtractor:
@@ -62,12 +106,27 @@ class PhysicsFeatureExtractor:
     paper's feature-selection algorithm), which is unrelated to this class.
     """
 
-    def __init__(self, physics: BearingPhysics | None = None) -> None:
-        # Use bearing physics constants to derive diagnostic targets from signal metadata.
+    def __init__(
+        self,
+        physics: BearingPhysics | None = None,
+        preprocessing: str = "mean_center",
+        feature_group: str = "all",
+    ) -> None:
+        # Physics targets are generated from each raw window independently of
+        # the classifier feature group.
         self.physics = physics or BearingPhysics()
+        if preprocessing not in {"mean_center", "mean_center_standardize"}:
+            raise ValueError("preprocessing must be 'mean_center' or 'mean_center_standardize'.")
+        if feature_group not in {"generic", "diagnostic", "all"}:
+            raise ValueError("feature_group must be 'generic', 'diagnostic', or 'all'.")
+        self.preprocessing = preprocessing
+        self.feature_group = feature_group
 
     def transform(self, windows: np.ndarray, sources: list[str] | None = None) -> FeatureBatch:
         # Convert raw windows into feature vectors, physics targets, and feature names.
+        windows = np.asarray(windows, dtype=np.float64)
+        if windows.ndim != 2:
+            raise ValueError("windows must have shape (n_windows, n_samples).")
         feature_rows: list[np.ndarray] = []
         physics_rows: list[np.ndarray] = []
         names: list[str] | None = None
@@ -82,29 +141,64 @@ class PhysicsFeatureExtractor:
             features=np.vstack(feature_rows).astype(np.float64),
             physics_targets=np.vstack(physics_rows).astype(np.float64),
             feature_names=names or [],
+            preprocessing=self.preprocessing,
+            feature_group=self.feature_group,
+            sample_rate_hz=float(self.physics.sample_rate_hz),
+            shaft_frequencies_hz=np.asarray([parse_shaft_frequency_hz(source) for source in (sources or [])], dtype=np.float64) if sources else None,
+            geometry={
+                "bearing": "6203",
+                "n": self.physics.geometry.rolling_elements,
+                "d_mm": self.physics.geometry.rolling_element_diameter_mm,
+                "D_mm": self.physics.geometry.pitch_diameter_mm,
+                "contact_angle_deg": self.physics.geometry.contact_angle_deg,
+                "source": self.physics.geometry.source,
+                "bpfo_ratio": self.physics.bpfo_ratio,
+                "bpfi_ratio": self.physics.bpfi_ratio,
+                "bsf_ratio": self.physics.bsf_ratio,
+                "ftf_ratio": self.physics.ftf_ratio,
+            },
         )
 
     def _one_window(self, window: np.ndarray, shaft_hz: float) -> tuple[np.ndarray, list[str], np.ndarray]:
         # Extract time-domain, spectral, and envelope-based diagnostic features for a single window.
         x = np.asarray(window, dtype=np.float64).reshape(-1)
         x = x - np.mean(x)
-        std = np.std(x) + 1e-12
-        x = x / std
+        if self.preprocessing == "mean_center_standardize":
+            x = x / (np.std(x) + 1e-12)
 
         time_values, time_names = _time_features(x)
         spectrum, freqs = _single_sided_spectrum(x, self.physics.sample_rate_hz)
         spectral_values, spectral_names = _spectral_features(spectrum, freqs)
-        envelope = _analytic_envelope(x)
-        envelope_spectrum, envelope_freqs = _single_sided_spectrum(envelope - np.mean(envelope), self.physics.sample_rate_hz)
-        diagnostic_values, diagnostic_names, physics_target = _diagnostic_features(
-            envelope_spectrum,
-            envelope_freqs,
+        diagnostic_values = np.asarray([], dtype=np.float64)
+        diagnostic_names: list[str] = []
+
+        if self.feature_group in {"diagnostic", "all"}:
+            envelope = _analytic_envelope(x)
+            envelope_spectrum, envelope_freqs = _single_sided_spectrum(
+                envelope - np.mean(envelope), self.physics.sample_rate_hz
+            )
+            diagnostic_values, diagnostic_names = _diagnostic_features(
+                envelope_spectrum,
+                envelope_freqs,
+                shaft_hz,
+                self.physics,
+                tolerance_hz=self.physics.diagnostic_tolerance_hz(x.size),
+            )
+        physics_target = physics_target_from_vibration_window(
+            window,
             shaft_hz,
             self.physics,
         )
 
-        values = np.concatenate([time_values, spectral_values, diagnostic_values])
-        names = time_names + spectral_names + diagnostic_names
+        generic_values = np.concatenate([time_values, spectral_values])
+        generic_names = time_names + spectral_names
+        if self.feature_group == "generic":
+            values, names = generic_values, generic_names
+        elif self.feature_group == "diagnostic":
+            values, names = diagnostic_values, diagnostic_names
+        else:
+            values = np.concatenate([generic_values, diagnostic_values])
+            names = generic_names + diagnostic_names
         return values, names, physics_target
 
 
@@ -200,37 +294,118 @@ def _analytic_envelope(x: np.ndarray) -> np.ndarray:
     return np.abs(analytic)
 
 
+def physics_target_from_vibration_window(
+    window: np.ndarray,
+    shaft_hz: float,
+    physics: BearingPhysics | None = None,
+) -> np.ndarray:
+    """Create a label-independent soft target from envelope-spectrum energy.
+
+    The healthy component is energy outside the bearing-fault harmonic bands;
+    each fault component is energy assigned to its nearest BPFO, BPFI, or BSF
+    harmonic within one diagnostic FFT-bin tolerance. These are consistency
+    targets, not ground-truth labels or calibrated posterior probabilities.
+    """
+    physics = physics or BearingPhysics()
+    x = np.asarray(window, dtype=np.float64).reshape(-1)
+    if x.size < 2:
+        raise ValueError("A vibration window must contain at least two samples.")
+    if not np.all(np.isfinite(x)):
+        raise ValueError("A vibration window must contain only finite values.")
+    x = x - np.mean(x)
+    envelope = _analytic_envelope(x)
+    power, freqs = _single_sided_spectrum(
+        envelope - np.mean(envelope),
+        physics.sample_rate_hz,
+    )
+    band_mask = (freqs >= 5.0) & (freqs <= 2000.0)
+    band_indices = np.flatnonzero(band_mask)
+    if band_indices.size == 0:
+        raise ValueError("The vibration window has no envelope-spectrum bins in 5-2000 Hz.")
+
+    characteristic = physics.characteristic_frequencies(shaft_hz)
+    fault_names = ("inner_race", "outer_race", "rolling_element")
+    centers: list[tuple[float, str]] = []
+    for fault_name in fault_names:
+        base_frequency = characteristic[fault_name]
+        for harmonic in range(1, physics.harmonic_count + 1):
+            center = base_frequency * harmonic
+            if 5.0 <= center <= 2000.0:
+                centers.append((center, fault_name))
+
+    assigned = np.zeros(freqs.size, dtype=bool)
+    fault_energy = {fault_name: 0.0 for fault_name in fault_names}
+    tolerance = physics.diagnostic_tolerance_hz(x.size)
+    if centers:
+        center_frequencies = np.asarray([item[0] for item in centers])
+        center_classes = [item[1] for item in centers]
+        distances = np.abs(freqs[band_indices, None] - center_frequencies[None, :])
+        nearest = np.argmin(distances, axis=1)
+        nearest_distance = distances[np.arange(band_indices.size), nearest]
+        matched_indices = band_indices[nearest_distance <= tolerance]
+        matched_classes = [center_classes[index] for index in nearest[nearest_distance <= tolerance]]
+        for bin_index, fault_name in zip(matched_indices, matched_classes):
+            fault_energy[fault_name] += float(power[bin_index])
+            assigned[bin_index] = True
+
+    healthy_energy = float(np.sum(power[band_indices[~assigned[band_indices]]]))
+    raw_target = np.asarray(
+        [healthy_energy, *(fault_energy[name] for name in fault_names)],
+        dtype=np.float64,
+    )
+    target_sum = float(np.sum(raw_target))
+    if not np.isfinite(target_sum) or target_sum <= 0.0:
+        return np.full(len(CLASS_NAMES), 1.0 / len(CLASS_NAMES), dtype=np.float64)
+    return raw_target / target_sum
+
+
 def _diagnostic_features(
     envelope_power: np.ndarray,
     freqs: np.ndarray,
     shaft_hz: float,
     physics: BearingPhysics,
-) -> tuple[np.ndarray, list[str], np.ndarray]:
-    # Build diagnostic features (prefixed `diagnostic_`) around bearing characteristic harmonics and a soft physics target.
+    tolerance_hz: float | None = None,
+) -> tuple[np.ndarray, list[str]]:
+    # Build diagnostic features around bearing characteristic harmonics.
     total = float(np.sum(envelope_power[(freqs >= 5.0) & (freqs <= 2000.0)]) + 1e-18)
     characteristic = physics.characteristic_frequencies(shaft_hz)
     values: list[float] = []
     names: list[str] = []
-    class_scores = {"healthy": 0.0, "inner_race": 0.0, "outer_race": 0.0, "rolling_element": 0.0}
+    class_scores: list[float] = []
     for label in ("outer_race", "inner_race", "rolling_element"):
         base_frequency = characteristic[label]
         harmonic_energies = []
         for harmonic in range(1, physics.harmonic_count + 1):
             center = base_frequency * harmonic
-            mask = np.abs(freqs - center) <= physics.tolerance_hz
+            tolerance = tolerance_hz if tolerance_hz is not None else physics.tolerance_hz
+            if tolerance is None:
+                resolution = float(freqs[1] - freqs[0]) if freqs.size > 1 else 0.0
+                tolerance = resolution
+            mask = np.abs(freqs - center) <= tolerance
             energy = float(np.sum(envelope_power[mask]) / total)
             harmonic_energies.append(energy)
             values.append(energy)
             names.append(f"diagnostic_{label}_envelope_h{harmonic}_energy_ratio")
-        class_scores[label] = float(np.sum(harmonic_energies))
-
-    max_fault_score = max(class_scores["inner_race"], class_scores["outer_race"], class_scores["rolling_element"])
-    class_scores["healthy"] = max(0.0, 0.05 - max_fault_score)
-    raw = np.asarray([class_scores[name] for name in CLASS_NAMES], dtype=np.float64)
-    physics_target = (raw + 1e-6) / float(np.sum(raw + 1e-6))
+        class_scores.append(float(np.sum(harmonic_energies)))
+    max_fault_score = max(class_scores, default=0.0)
     values.extend([shaft_hz, max_fault_score])
     names.extend(["diagnostic_shaft_frequency_hz", "diagnostic_max_fault_class_envelope_energy_ratio"])
-    return np.asarray(values, dtype=np.float64), names, physics_target
+    return np.asarray(values, dtype=np.float64), names
+
+
+def select_feature_group(features: np.ndarray, feature_names: list[str], feature_group: str) -> tuple[np.ndarray, list[str]]:
+    """Select generic or diagnostic columns using names rather than indices."""
+    if feature_group not in {"generic", "diagnostic", "all"}:
+        raise ValueError("feature_group must be 'generic', 'diagnostic', or 'all'.")
+    if feature_group == "all":
+        return features, list(feature_names)
+    if feature_group == "generic":
+        indices = [i for i, name in enumerate(feature_names) if name.startswith(("time_", "spectral_"))]
+    else:
+        indices = [i for i, name in enumerate(feature_names) if name.startswith("diagnostic_")]
+    if not indices:
+        raise ValueError(f"No {feature_group} features found.")
+    return features[:, indices], [feature_names[i] for i in indices]
 
 
 class Standardizer:

@@ -11,17 +11,12 @@ from .model import PhysicsInformedNN, TrainingHistory, labels_to_indices
 
 
 def compute_class_weights(labels: np.ndarray, class_names: tuple[str, ...]) -> dict[str, float]:
-    """Same inverse-frequency + focal-loss formula used elsewhere in this
-    project (train.py's train_from_windows/run_grouped_experiment), factored
-    out here so every trained model in the 4-version comparison uses an
-    identical weighting scheme -- otherwise accuracy/F1 differences could be
-    partly explained by inconsistent class balancing rather than the
-    feature set or importance method under test.
-    """
+    """Balanced class weights: n_samples / (n_classes * class_count)."""
     class_counts = {label: int(np.sum(labels == label)) for label in class_names}
     total = len(labels)
+    n_classes = len(class_names)
     return {
-        label: (total / (len(class_counts) * count)) * (1 - (count / total)) ** 2
+        label: float(total / (n_classes * count))
         for label, count in class_counts.items()
     }
 

@@ -79,7 +79,9 @@ class PhysicsInformedNN:
         self.physics_weight = physics_weight
         self.learning_rate = learning_rate
         self.use_physics_loss = use_physics_loss
-        rng = np.random.default_rng(seed)
+        self.seed = int(seed)
+        self._rng = np.random.default_rng(self.seed)
+        rng = self._rng
         self.w1 = rng.normal(0.0, np.sqrt(2.0 / input_dim), size=(input_dim, hidden_dim))
         self.b1 = np.zeros(hidden_dim)
         self.w2 = rng.normal(0.0, np.sqrt(2.0 / hidden_dim), size=(hidden_dim, len(class_names)))
@@ -102,7 +104,7 @@ class PhysicsInformedNN:
         patience: int = 5,
         class_weights: dict[str, float] | None = None,
     ) -> TrainingHistory:
-        """Fit the model to training data with optional hyperparameter search."""
+        """Fit once using the explicitly configured learning rate and physics weight."""
         # Standardize input features before training.
         x_train = self.standardizer.fit_transform(x)
         y_indices = labels_to_indices(y, self.class_names)
@@ -115,42 +117,6 @@ class PhysicsInformedNN:
                 labels_to_indices(y_val, self.class_names),
                 physics_val,
             )
-
-        best_loss = float("inf")
-        best_params = (self.learning_rate, self.physics_weight)
-
-        for lr in np.linspace(lr_range[0], lr_range[1], 5):
-            for physics_weight in np.linspace(lambda_range[0], lambda_range[1], 5):
-                trial = PhysicsInformedNN(
-                    input_dim=self.input_dim,
-                    hidden_dim=self.hidden_dim,
-                    class_names=self.class_names,
-                    physics_weight=physics_weight,
-                    learning_rate=lr,
-                    use_physics_loss=self.use_physics_loss,
-                    seed=0,
-                )
-                trial.standardizer.mean_ = self.standardizer.mean_
-                trial.standardizer.scale_ = self.standardizer.scale_
-                trial.w1 = self.w1.copy()
-                trial.b1 = self.b1.copy()
-                trial.w2 = self.w2.copy()
-                trial.b2 = self.b2.copy()
-                trial_history = trial._fit_epochs(
-                    x_train,
-                    y_indices,
-                    physics_targets,
-                    epochs,
-                    batch_size,
-                    validation_data,
-                    verbose=False,
-                    class_weights=class_weights,
-                )
-                if trial_history.loss and trial_history.loss[-1] < best_loss:
-                    best_loss = trial_history.loss[-1]
-                    best_params = (lr, physics_weight)
-
-        self.learning_rate, self.physics_weight = best_params
 
         best_loss = float("inf")
         no_improvement_count = 0
@@ -228,8 +194,7 @@ class PhysicsInformedNN:
         class_weights: dict[str, float] | None = None,
     ) -> tuple[float, float]:
         # Shuffle training samples and apply batch updates over one epoch.
-        rng = np.random.default_rng()
-        order = rng.permutation(x.shape[0])
+        order = self._rng.permutation(x.shape[0])
         for start in range(0, x.shape[0], batch_size):
             batch_indices = order[start : start + batch_size]
             self._train_batch(
@@ -328,6 +293,7 @@ class PhysicsInformedNN:
             "physics_weight": np.asarray([self.physics_weight]),
             "learning_rate": np.asarray([self.learning_rate]),
             "use_physics_loss": np.asarray([self.use_physics_loss]),
+            "seed": np.asarray([self.seed]),
         }
         if self.training_history is not None:
             savez_kwargs["history_loss"] = np.asarray(self.training_history.loss, dtype=np.float64)
@@ -351,6 +317,7 @@ class PhysicsInformedNN:
                 # use_physics_algorithm -> use_physics_loss rename.
                 else bool(data["use_physics_algorithm"][0]) if "use_physics_algorithm" in data else True
             ),
+            seed=int(data["seed"][0]) if "seed" in data else 7,
         )
         model.w1 = data["w1"]
         model.b1 = data["b1"]

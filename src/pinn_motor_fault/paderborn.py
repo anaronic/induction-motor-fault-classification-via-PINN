@@ -10,12 +10,28 @@ import shutil
 import subprocess
 import urllib.parse
 import urllib.request
+from typing import Any
 
 import numpy as np
 from tqdm import tqdm
 
 OFFICIAL_BASE_URL = "https://groups.uni-paderborn.de/kat/BearingDataCenter/"
 BEARING_CODE_RE = re.compile(r"\b(K(?:00\d|A\d{2}|I\d{2}|B\d{2}))\b", re.IGNORECASE)
+MODALITY_SAMPLE_RATES_HZ = {
+    "vibration": 64_000.0,
+    "current": 64_000.0,
+    "torque": 4_000.0,
+}
+
+
+@dataclass(frozen=True)
+class PaderbornLoadResult:
+    windows: np.ndarray
+    labels: np.ndarray
+    sources: list[str]
+    sampling_rates_hz: np.ndarray
+    modality: str
+    skipped: list[dict[str, str]]
 
 
 class DatasetError(RuntimeError):
@@ -147,7 +163,33 @@ def load_paderborn_windows(
     stride: int = 2048,
     signal_preference: str = "current",
     max_windows_per_file: int | None = 20,
+    require_modality_match: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    result = load_paderborn_windows_with_metadata(
+        data_dir=data_dir,
+        window_size=window_size,
+        stride=stride,
+        signal_preference=signal_preference,
+        max_windows_per_file=max_windows_per_file,
+        require_modality_match=require_modality_match,
+    )
+    return result.windows, result.labels, result.sources
+
+
+def load_paderborn_windows_with_metadata(
+    data_dir: Path,
+    window_size: int = 4096,
+    stride: int = 2048,
+    signal_preference: str = "current",
+    max_windows_per_file: int | None = 20,
+    require_modality_match: bool = False,
+) -> PaderbornLoadResult:
+    """Load windows plus modality and skipped-file metadata."""
+    modality = str(signal_preference).lower()
+    if modality not in MODALITY_SAMPLE_RATES_HZ:
+        raise DatasetError(
+            f"Unsupported modality '{modality}'. Use vibration, current, or torque."
+        )
     mat_files = sorted(data_dir.rglob("*.mat"))
     if not mat_files:
         raise DatasetError(f"No .mat files found under {data_dir}")
@@ -155,13 +197,17 @@ def load_paderborn_windows(
     windows: list[np.ndarray] = []
     labels: list[str] = []
     sources: list[str] = []
-    skipped: list[tuple[Path, str]] = []
+    skipped: list[dict[str, str]] = []
     for mat_path in tqdm(mat_files, desc='Loading .mat files'):
         try:
-            signal = load_signal_from_mat(mat_path, signal_preference=signal_preference)
+            signal = load_signal_from_mat(
+                mat_path,
+                signal_preference=signal_preference,
+                require_modality_match=require_modality_match,
+            )
             label = infer_label_from_path(mat_path)
         except Exception as exc:
-            skipped.append((mat_path, f"{type(exc).__name__}: {exc}"))
+            skipped.append({"path": str(mat_path), "reason": f"{type(exc).__name__}: {exc}"})
             continue
         file_windows = make_windows(signal, window_size=window_size, stride=stride)
         if max_windows_per_file is not None:
@@ -171,14 +217,30 @@ def load_paderborn_windows(
         sources.extend([str(mat_path)] * len(file_windows))
 
     if not windows:
-        details = "; ".join(f"{path}: {reason}" for path, reason in skipped[:5])
+        details = "; ".join(f"{item['path']}: {item['reason']}" for item in skipped[:5])
         raise DatasetError(f"MAT files were found, but no signal windows could be created. Skipped examples: {details}")
-    for path, reason in skipped:
-        print(f"warning: skipped unreadable MAT file {path}: {reason}")
-    return np.stack(windows).astype(np.float64), np.asarray(labels), sources
+    for item in skipped:
+        print(f"warning: skipped unreadable MAT file {item['path']}: {item['reason']}")
+    sample_rate = MODALITY_SAMPLE_RATES_HZ[modality]
+    return PaderbornLoadResult(
+        windows=np.stack(windows).astype(np.float64),
+        labels=np.asarray(labels),
+        sources=sources,
+        sampling_rates_hz=np.full(len(windows), sample_rate, dtype=np.float64),
+        modality=modality,
+        skipped=skipped,
+    )
 
 
-def load_signal_from_mat(path: Path, signal_preference: str = "current") -> np.ndarray:
+def load_signal_from_mat(
+    path: Path,
+    signal_preference: str = "current",
+    require_modality_match: bool = False,
+) -> np.ndarray:
+    if signal_preference not in MODALITY_SAMPLE_RATES_HZ:
+        raise DatasetError(
+            f"Unsupported modality '{signal_preference}'. Use vibration, current, or torque."
+        )
     try:
         from scipy.io import loadmat
     except ImportError as exc:
@@ -192,6 +254,17 @@ def load_signal_from_mat(path: Path, signal_preference: str = "current") -> np.n
         _collect_numeric_series(value, key, signal_preference, candidates)
     if not candidates:
         raise DatasetError(f"No usable numeric signal found in {path}")
+    if require_modality_match:
+        matched = [
+            item for item in candidates
+            if _matches_signal_preference(item[2], signal_preference)
+        ]
+        if not matched:
+            raise DatasetError(
+                f"No channel name in {path} identifies the requested "
+                f"{signal_preference!r} modality."
+            )
+        candidates = matched
     candidates.sort(key=lambda item: item[0], reverse=True)
     signal = np.asarray(candidates[0][1], dtype=np.float64).reshape(-1)
     signal = signal[np.isfinite(signal)]
@@ -254,11 +327,25 @@ def _signal_score(path: str, preference: str, size: int) -> int:
         for token in ("vibration", "acc", "bearing", "vib"):
             if token in lowered:
                 score += 10_000
+    elif preference == "torque":
+        for token in ("torque", "moment", "load"):
+            if token in lowered:
+                score += 10_000
     if "data" in lowered:
         score += 1000
     if "time" in lowered or "speed" in lowered or "temp" in lowered:
         score -= 5000
     return score
+
+
+def _matches_signal_preference(path: str, preference: str) -> bool:
+    lowered = path.lower()
+    tokens = {
+        "current": ("current", "phase", "i_1", "i1", "i_2", "i2"),
+        "vibration": ("vibration", "acceleration", "accelerometer", "bearing", "vib", "acc"),
+        "torque": ("torque", "moment", "load"),
+    }
+    return any(token in lowered for token in tokens[preference])
 
 
 def make_windows(signal: np.ndarray, window_size: int, stride: int) -> list[np.ndarray]:
@@ -272,7 +359,13 @@ def make_windows(signal: np.ndarray, window_size: int, stride: int) -> list[np.n
 def parse_shaft_frequency_hz(source: str | None, default_hz: float = 25.0) -> float:
     if not source:
         return default_hz
-    match = re.search(r"N(\d{2})", source.upper())
-    if not match:
+    normalized = source.upper()
+    match = re.search(r"(?:^|[_\-.])N(?:0)?(\d{1,2})(?:[_\-.]|$)", normalized)
+    if match is None:
+        match = re.search(r"N(\d{2})", normalized)
+    if match is None:
         return default_hz
-    return float(int(match.group(1)) * 100.0 / 60.0)
+    rpm_hundred = int(match.group(1))
+    if rpm_hundred <= 0:
+        return default_hz
+    return float(rpm_hundred * 100.0 / 60.0)
